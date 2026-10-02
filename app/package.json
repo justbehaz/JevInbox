@@ -10,6 +10,7 @@
     "smoke:imap": "tsx --env-file-if-exists=.env.local scripts/smoke-imap.ts"
   },
   "dependencies": {
+    "@napi-rs/keyring": "^2.1.0",
     "better-sqlite3": "^13.0.3",
     "imapflow": "^2.2.1",
     "mailparser": "^3.9.33",

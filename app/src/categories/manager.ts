@@ -12,13 +12,20 @@ export interface ManagedCategory extends Category {
 
 export type CatResult = { ok: true; category?: ManagedCategory } | { ok: false; error: string };
 
+export interface CategorySnapshot { cats: ManagedCategory[]; nextCustom: number }
+
 export class CategoryManager {
   private cats: ManagedCategory[];
   private nextCustom: number;
 
-  constructor(defaults: Category[] = DEFAULT_CATEGORIES) {
-    this.cats = defaults.map((c) => ({ ...c, custom: false, enabled: true }));
-    this.nextCustom = defaults.length + 1;
+  /** `restore` re-creates a saved state; `onChange` is called after every change (for persistence). */
+  constructor(defaults: Category[] = DEFAULT_CATEGORIES, restore?: CategorySnapshot, private readonly onChange?: (s: CategorySnapshot) => void) {
+    this.cats = restore ? restore.cats.map((c) => ({ ...c })) : defaults.map((c) => ({ ...c, custom: false, enabled: true }));
+    this.nextCustom = restore ? restore.nextCustom : defaults.length + 1;
+  }
+
+  private changed(): void {
+    this.onChange?.({ cats: this.list(), nextCustom: this.nextCustom });
   }
 
   list(): ManagedCategory[] {
@@ -57,6 +64,7 @@ export class CategoryManager {
     const id = `cat_${String(this.nextCustom++).padStart(3, "0")}`;
     const category: ManagedCategory = { id, name, question: `Is this message about ${name}?`, custom: true, enabled: true };
     this.cats.push(category);
+    this.changed();
     return { ok: true, category: { ...category } };
   }
 
@@ -64,6 +72,7 @@ export class CategoryManager {
     const c = this.cats.find((x) => x.id === id);
     if (!c) return { ok: false, error: "Unknown category." };
     c.enabled = enabled; // still counts toward the cap either way
+    this.changed();
     return { ok: true, category: { ...c } };
   }
 
@@ -73,6 +82,7 @@ export class CategoryManager {
     if (i < 0) return { ok: false, error: "Unknown category." };
     if (this.cats[i].enabled) return { ok: false, error: "Disable a category before deleting it." };
     const [gone] = this.cats.splice(i, 1);
+    this.changed();
     return { ok: true, category: { ...gone } };
   }
 }
