@@ -10,7 +10,7 @@ A web mail app that sorts Gmail, Outlook, iCloud and IMAP mail into categories u
   - Pipeline in `app/src/pipeline/run.ts`: fetch, redact, never-junk gate, move.
   - Sender view in `app/src/senders/`: local SQLite (better-sqlite3), grouped on the normalised From address with a domain rollup. Allow, mark-junk and mute are wired to the gate rules: mark-junk never moves Auth or security-shaped mail, mute only hides and never moves anything.
   - Read-only IMAP smoke script (see below).
-  - Tests use an in-memory IMAP server and a mocked imapflow client, never a live account (207 tests).
+  - Tests use an in-memory IMAP server and a mocked imapflow client, never a live account (219 tests).
 - Web UI in `app/app/` and `app/components/` (Next.js, Tailwind, light and dark themes), backed by the pipeline, the sender store and a fake jev.ai client through the action layer in `app/src/ui/`.
 - Accounts: iCloud and generic IMAP can be added from Settings (read-only connection test, then confirm), with passwords in the Keychain (or an encrypted file), a persistent SQLite store outside the repo, Sync now, and 5-minute background polling.
 - Not built yet: Gmail and Outlook adapters (they need your own OAuth app registrations) and the real jev.ai client (waiting for its API docs).
@@ -30,11 +30,12 @@ Production build: `npm run build` then `npm start`.
 ### Add your iCloud account
 1. In your Apple Account (account.apple.com), open Sign-In and Security, then App-Specific Passwords, and generate one named "Jev Inbox". Two-factor authentication must be on. Never use your Apple Account password.
 2. Run `npm run dev`, open Settings, and use the iCloud form: your iCloud email address and the app-specific password. Press Test connection.
-3. Review the result: it connected read-only, the folders and capabilities found, and the Jev folders that would be created. Nothing has changed on your mailbox yet.
-4. Press Confirm and save account. This creates the Jev Auth, Jev Needs review and Jev Junk folders, stores the password in the macOS Keychain, and saves the account details locally.
-5. Press Sync now (header). The first sync looks at the newest 200 messages; later syncs run every 5 minutes while the app is running.
+3. Review the result: it connected read-only, the folders and capabilities found. Nothing has changed on your mailbox.
+4. Press Confirm and save account. This stores the password in the macOS Keychain and saves the account details locally, in **Preview mode**. Nothing is created or moved on your mailbox.
+5. Press Sync now (header). The first sync looks at the newest 200 messages; later syncs run every 5 minutes while the app is running. In Preview mode a sync only classifies and records in the app: each message shows where it would go, and the server gets no moves, no flags and no folder creation (the connection itself is read-only).
+6. When you are happy, open Settings and use "Apply filing to my mailbox". It first shows the counts, for example "12 Auth messages will move to Jev Auth. Nothing will be junked or deleted." Applying creates the Jev Auth, Jev Needs review and Jev Junk folders, turns Preview off, and moves the Auth mail already recorded. After that, each sync moves new Auth mail into Jev Auth. "Turn preview back on" stops future moves; it does not undo past ones.
 
-jev.ai is not connected yet, so only the deterministic rules run: Auth mail is recognised and moved to Jev Auth; everything else stays where it is (shown under Needs review in the app); nothing is junked. Remove account (Settings) deletes the stored password and the local data for it; it never touches mail on the server.
+jev.ai is not connected yet, so only the deterministic rules run: Auth mail is recognised (and moved to Jev Auth once you apply filing); everything else stays where it is (shown under Needs review in the app); nothing is junked. Remove account (Settings) deletes the stored password and the local data for it; it never touches mail on the server, and the Jev folders stay on your mailbox.
 
 ### Where data lives
 - Database: `~/Library/Application Support/JevInbox/jev.sqlite` on macOS (set `JEV_DATA_DIR` to change it). It must be outside the project folder. It holds message metadata, senders and categories, never passwords.

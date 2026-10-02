@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { syncNowAction } from "../app/actions";
 import { getAppState } from "../src/ui/state";
-import { JEV_BANNER, JEV_BANNER_DETAIL } from "../src/ui/accountActions";
+import { JEV_BANNER, JEV_BANNER_DETAIL, PREVIEW_BANNER } from "../src/ui/accountActions";
 import { navData } from "../src/ui/actions";
 import NavLink from "./NavLink";
 import ThemeToggle from "./ThemeToggle";
@@ -18,6 +18,7 @@ export default async function Shell({ children }: { children: React.ReactNode })
   const state = await getAppState();
   const nav = navData(state);
   const live = state.mode === "live";
+  const preview = live && state.accountIds().some((id) => state.isPreview(id));
   return (
     <div className="flex min-h-screen flex-col">
       <header className="flex items-center justify-between gap-4 border-b border-line bg-card px-4 py-2">
@@ -29,6 +30,9 @@ export default async function Shell({ children }: { children: React.ReactNode })
           <Link href="/settings" className="rounded border border-line px-3 py-1 text-sm hover:bg-sel">Settings</Link>
         </div>
       </header>
+      {preview ? (
+        <div role="status" className="border-b border-accent bg-card px-4 py-2 text-sm"><strong>Preview mode.</strong> {PREVIEW_BANNER} Turn it off in Settings when you are ready.</div>
+      ) : null}
       {live ? (
         <div role="status" className="border-b border-warn bg-card px-4 py-2 text-sm"><strong>{JEV_BANNER}.</strong> {JEV_BANNER_DETAIL}</div>
       ) : null}

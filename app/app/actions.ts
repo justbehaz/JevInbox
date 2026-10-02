@@ -115,3 +115,13 @@ export async function removeAccountAction(f: FormData): Promise<void> {
 export async function syncNowAction(f: FormData): Promise<void> {
   back(f, await acct.syncNow(await getRuntime()), "/");
 }
+
+/** Preview off: create the Jev folders, then move the Auth mail already recorded. */
+export async function applyFilingAction(f: FormData): Promise<void> {
+  back(f, await acct.applyFiling(await getRuntime(), str(f, "accountId")), "/settings");
+}
+
+/** Preview on: future syncs stop moving anything. Past moves are not undone. */
+export async function previewOnAction(f: FormData): Promise<void> {
+  back(f, acct.previewOn(await getRuntime(), str(f, "accountId")), "/settings");
+}

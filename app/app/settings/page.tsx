@@ -1,7 +1,7 @@
-import { cancelAccountAction, confirmAccountAction, removeAccountAction, syncNowAction, testAccountAction } from "../actions";
+import { applyFilingAction, cancelAccountAction, confirmAccountAction, previewOnAction, removeAccountAction, syncNowAction, testAccountAction } from "../actions";
 import Notice, { param, SP } from "../../components/Notice";
 import { getRuntime } from "../../src/runtime/runtime";
-import { JEV_BANNER, JEV_BANNER_DETAIL, pendingReport } from "../../src/ui/accountActions";
+import { applyPlan, describePlan, JEV_BANNER, JEV_BANNER_DETAIL, pendingReport, PREVIEW_BANNER } from "../../src/ui/accountActions";
 
 const input = "w-full rounded border border-line bg-bg px-2 py-1 text-sm";
 const submit = "rounded bg-accent px-3 py-1 text-sm font-medium text-accent-fg";
@@ -29,11 +29,36 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 <p className="text-sm text-muted">{a.lastSyncAt ? `Last sync ${a.lastSyncAt.slice(0, 16).replace("T", " ")} UTC: ${a.lastSyncNote ?? ""}` : "Not synced yet."}</p>
                 <div className="mt-2 flex flex-wrap items-start gap-2">
                   <form action={syncNowAction}><input type="hidden" name="returnTo" value="/settings" /><button type="submit" className="rounded border border-line px-3 py-1 text-sm hover:bg-sel">Sync now</button></form>
+                  {a.preview ? (() => {
+                    const plan = applyPlan(rt, a.id);
+                    return (
+                      <details className="rounded border border-accent p-2">
+                        <summary className="cursor-pointer text-sm">Preview mode is on &mdash; apply filing to my mailbox&hellip;</summary>
+                        <form action={applyFilingAction} className="mt-2 max-w-md space-y-2">
+                          <input type="hidden" name="returnTo" value="/settings" /><input type="hidden" name="accountId" value={a.id} />
+                          <p className="text-sm">{PREVIEW_BANNER}</p>
+                          {a.lastSyncAt ? (
+                            <p role="note" className="rounded border border-accent px-2 py-1 text-sm">{plan ? describePlan(plan) : ""}</p>
+                          ) : (
+                            <p role="note" className="rounded border border-line px-2 py-1 text-sm text-muted">Press Sync now first to see how many messages would move.</p>
+                          )}
+                          <p className="text-xs text-muted">Applying creates these folders on your mailbox: {plan?.willCreate.join(", ")}. Your other folders, including the server&apos;s Junk, are never written to, and no mail is ever deleted.</p>
+                          <button type="submit" className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-fg">Apply filing to my mailbox</button>
+                        </form>
+                      </details>
+                    );
+                  })() : (
+                    <form action={previewOnAction} className="max-w-md">
+                      <input type="hidden" name="returnTo" value="/settings" /><input type="hidden" name="accountId" value={a.id} />
+                      <button type="submit" className="rounded border border-line px-3 py-1 text-sm hover:bg-sel">Turn preview back on</button>
+                      <p className="mt-1 text-xs text-muted">Stops future moves. It does not undo mail that was already moved.</p>
+                    </form>
+                  )}
                   <details className="rounded border border-line p-2">
                     <summary className="cursor-pointer text-sm">Remove account&hellip;</summary>
                     <form action={removeAccountAction} className="mt-2 max-w-md space-y-2">
                       <input type="hidden" name="returnTo" value="/settings" /><input type="hidden" name="accountId" value={a.id} />
-                      <p role="note" className="rounded border border-warn px-2 py-1 text-sm">This deletes the password stored for this account and the data this app keeps about it on this computer. It does not touch any mail on the server.</p>
+                      <p role="note" className="rounded border border-warn px-2 py-1 text-sm">This deletes the password stored for this account and the data this app keeps about it on this computer. It does not touch any mail on the server. The Jev folders (Jev Auth, Jev Needs review, Jev Junk) stay on your mailbox, along with any mail already moved into them.</p>
                       <button type="submit" className="rounded border border-danger px-3 py-1 text-sm text-danger hover:bg-sel">Remove {a.email}</button>
                     </form>
                   </details>
@@ -54,9 +79,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <ul className="mt-1 max-h-48 overflow-auto rounded border border-line bg-bg p-2 text-sm" aria-label="Folders found">
             {report.folders.map((f) => <li key={f.path}>{f.path}{f.specialUse ? <span className="ml-2 text-xs text-muted">{f.specialUse}</span> : null}</li>)}
           </ul>
-          <p className="mt-3 text-sm">{report.willCreate.length ? <>Confirming will create these folders: <strong>{report.willCreate.join(", ")}</strong>. Your existing folders, including the server&apos;s Junk, are never written to, and no mail is ever deleted.</> : "The Jev folders already exist."}</p>
+          <p className="mt-3 text-sm">Confirming only saves the account, in <strong>Preview mode</strong>: nothing is created or moved on your mailbox. {report.willCreate.length ? <>Later, when you apply filing, these folders will be created: <strong>{report.willCreate.join(", ")}</strong>. </> : "The Jev folders already exist. "}Your other folders, including the server&apos;s Junk, are never written to, and no mail is ever deleted.</p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <form action={confirmAccountAction}><input type="hidden" name="token" value={token} /><button type="submit" className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-fg">Confirm and save account</button></form>
+            <form action={confirmAccountAction}><input type="hidden" name="token" value={token} /><button type="submit" className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-fg">Confirm and save account (Preview mode)</button></form>
             <form action={cancelAccountAction}><input type="hidden" name="returnTo" value="/settings" /><input type="hidden" name="token" value={token} /><button type="submit" className="rounded border border-line px-3 py-1 text-sm hover:bg-sel">Cancel</button></form>
           </div>
         </section>

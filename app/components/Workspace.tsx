@@ -49,7 +49,7 @@ export default async function Workspace({
                         <span className="block truncate text-sm">{r.subject}</span>
                       </Link>
                       <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
-                        <Badge row={r} /> <span>{r.date.slice(0, 10)}</span>
+                        <Badge row={r} /> <span>{r.date.slice(0, 10)}</span>{r.previewNote ? <span className="rounded border border-line px-1.5 py-0.5">{r.previewNote}</span> : null}
                       </span>
                       {rowActions ? <div className="mt-2">{rowActions(r)}</div> : null}
                     </div>
