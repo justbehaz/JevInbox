@@ -126,6 +126,21 @@ export class ImapAdapter implements MailAdapter {
     };
   }
 
+  /** Read-only: details of the newest `limit` messages (used by the smoke script). */
+  async fetchLatest(folder: string, limit: number): Promise<MessageDetail[]> {
+    await this.guardReadable(folder);
+    const state = await this.t.folderState(folder);
+    const raws = await this.t.fetchLatest(folder, limit);
+    return raws.map((m) => ({
+      ...this.summary(folder, state.uidValidity, m),
+      replyTo: m.replyTo,
+      listUnsubscribe: m.listUnsubscribe,
+      authenticationResults: m.authenticationResults,
+      snippet: buildSnippet(m.bodyText),
+      bodySample: m.bodyText.slice(0, BODY_SAMPLE_MAX),
+    }));
+  }
+
   async ensureBucket(bucket: BucketName): Promise<BucketInfo> {
     const cached = this.buckets.get(bucket);
     if (cached) return cached;

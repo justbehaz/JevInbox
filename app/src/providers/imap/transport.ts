@@ -41,6 +41,8 @@ export interface ImapTransport {
   folderState(path: string): Promise<FolderState>;
   /** Messages with uid > afterUid, ascending. */
   fetchSince(path: string, afterUid: number): Promise<RawMessage[]>;
+  /** The newest `limit` messages, ascending by UID. Read-only. */
+  fetchLatest(path: string, limit: number): Promise<RawMessage[]>;
   fetchOne(path: string, uid: number): Promise<RawMessage | null>;
   /** Server-side MOVE. Only call if capabilities().move. */
   move(path: string, uid: number, destination: string): Promise<{ destUid?: number }>;

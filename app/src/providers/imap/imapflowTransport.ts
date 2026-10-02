@@ -155,6 +155,26 @@ export class ImapFlowTransport implements ImapTransport {
     });
   }
 
+  fetchLatest(path: string, limit: number): Promise<RawMessage[]> {
+    return this.guard(async () => {
+      const client = this.c();
+      const lock = await client.getMailboxLock(path, { readOnly: true });
+      try {
+        const exists = client.mailbox && typeof client.mailbox === "object" ? Number((client.mailbox as { exists: number }).exists) : 0;
+        if (!exists) return [];
+        const first = Math.max(1, exists - limit + 1);
+        const out: RawMessage[] = [];
+        // sequence-number range (no {uid:true}), newest `limit` messages
+        for await (const m of client.fetch(`${first}:*`, { uid: true, flags: true, envelope: true, source: { maxLength: SOURCE_MAX } })) {
+          out.push(await this.toRaw(m as any));
+        }
+        return out.sort((a, b) => a.uid - b.uid).slice(-limit);
+      } finally {
+        lock.release();
+      }
+    });
+  }
+
   fetchOne(path: string, uid: number): Promise<RawMessage | null> {
     return this.guard(async () => {
       const client = this.c();

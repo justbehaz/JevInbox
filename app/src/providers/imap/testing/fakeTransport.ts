@@ -92,6 +92,10 @@ export class FakeImapTransport implements ImapTransport {
     this.ops.push({ op: "fetchSince", path, uid: afterUid });
     return this.messages(path).filter((m) => m.uid > afterUid).map(({ keywords, ...m }) => m);
   }
+  async fetchLatest(path: string, limit: number): Promise<RawMessage[]> {
+    this.ops.push({ op: "fetchLatest", path, uid: limit });
+    return this.messages(path).sort((a, b) => a.uid - b.uid).slice(-limit).map(({ keywords, ...m }) => m);
+  }
   async fetchOne(path: string, uid: number): Promise<RawMessage | null> {
     this.ops.push({ op: "fetchOne", path, uid });
     const m = this.f(path).msgs.get(uid);
