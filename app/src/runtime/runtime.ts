@@ -7,6 +7,14 @@ import { AccountStore } from "../accounts/accountStore";
 import { CategoryManager } from "../categories/manager";
 import { DisconnectedJev } from "../jev/disconnected";
 import { ImapAdapter } from "../providers/imap/adapter";
+import { GmailAdapter, GMAIL_LABELS } from "../providers/gmail/adapter";
+import { GmailHttp } from "../providers/gmail/http";
+import { OutlookAdapter, OUTLOOK_FOLDERS } from "../providers/outlook/adapter";
+import { GraphHttp } from "../providers/outlook/http";
+import { missingConfigMessage, OAuthProvider, oauthClient, PROVIDERS } from "../oauth/config";
+import { OAuthService } from "../oauth/service";
+import { TokenManager } from "../oauth/tokens";
+import type { MailAdapter } from "../providers/types";
 import { ImapFlowTransport } from "../providers/imap/imapflowTransport";
 import { DEFAULT_BUCKET_FOLDERS } from "../providers/imap/folders";
 import { ReadOnlyTransport } from "../providers/imap/readonly";
@@ -28,6 +36,10 @@ export interface RuntimeDeps {
   secrets: SecretStore;
   makeTransport?: TransportFactory;
   db?: Database.Database;
+  /** Injected in tests (mocked HTTP). Defaults to the global fetch. */
+  fetchFn?: typeof fetch;
+  /** Where OAuth client ids come from. Defaults to process.env. */
+  env?: Record<string, string | undefined>;
 }
 
 export interface ApplyPlan { accountId: string; email: string; authToMove: number; willCreate: string[] }
@@ -42,13 +54,19 @@ export class Runtime {
   readonly sync: SyncService;
   private demo: DemoAppState | null = null;
   private live: AppState | null = null;
-  private adapters = new Map<string, { adapter: ImapAdapter; at: number }>();
+  private adapters = new Map<string, { adapter: MailAdapter; at: number }>();
+  private tokens = new Map<string, TokenManager>();
+  private fetchFn: typeof fetch;
+  private env: Record<string, string | undefined>;
+  readonly oauth: OAuthService;
   private categories: CategoryManager;
   private makeTransport: TransportFactory;
   readonly dataDir: string;
 
   constructor(d: RuntimeDeps) {
     this.dataDir = d.dataDir;
+    this.fetchFn = d.fetchFn ?? ((...a) => fetch(...a));
+    this.env = d.env ?? process.env;
     this.db = d.db ?? openDb(join(d.dataDir, DB_FILE));
     this.secrets = d.secrets;
     this.accounts = new AccountStore(this.db);
@@ -61,8 +79,9 @@ export class Runtime {
     }));
     this.service = new AccountService({
       accounts: this.accounts, secrets: this.secrets, store: this.liveStore, makeTransport: this.makeTransport,
-      onChange: () => this.dropAdapters(),
+      onChange: () => { this.dropAdapters(); this.tokens.clear(); },
     });
+    this.oauth = new OAuthService({ accounts: this.accounts, secrets: this.secrets, fetchFn: this.fetchFn, env: this.env, onChange: () => { this.dropAdapters(); this.tokens.clear(); } });
     this.sync = new SyncService({
       accounts: this.accounts, store: this.liveStore, categories: this.categories,
       adapterFor: (id) => this.adapterFor(id), jev: new DisconnectedJev(), jevConnected: false,
@@ -92,7 +111,7 @@ export class Runtime {
    * creation, move, copy, flag) can reach the server, whatever calls the adapter. Only
    * applyFiling asks for a writable adapter (`write: true`), and only before preview is turned off.
    */
-  async adapterFor(accountId: string, opts: { write?: boolean } = {}): Promise<ImapAdapter> {
+  async adapterFor(accountId: string, opts: { write?: boolean } = {}): Promise<MailAdapter> {
     const acct = this.accounts.get(accountId);
     if (!acct) throw new Error("Unknown account.");
     const readOnly = acct.preview && !opts.write;
@@ -100,13 +119,39 @@ export class Runtime {
     const hit = this.adapters.get(key);
     if (hit && Date.now() - hit.at < REUSE_MS) return hit.adapter;
     if (hit) { await hit.adapter.disconnect().catch(() => undefined); this.adapters.delete(key); }
-    const creds = await new SecretCredentialsProvider(this.secrets, acct.id, acct.email).get();
-    const preset = { name: acct.provider === "icloud" ? "iCloud" : "IMAP", host: acct.host, port: acct.port, tls: acct.tls, authHint: "app_password" as const };
-    const raw = this.makeTransport({ provider: acct.provider, email: acct.email, preset, credentials: creds });
-    const adapter = new ImapAdapter({ transport: readOnly ? new ReadOnlyTransport(raw) : raw, providerName: preset.name });
+
+    let adapter: MailAdapter;
+    if (acct.provider === "gmail" || acct.provider === "outlook") {
+      adapter = this.oauthAdapter(acct.provider, acct.id, readOnly);
+    } else {
+      const creds = await new SecretCredentialsProvider(this.secrets, acct.id, acct.email).get();
+      const preset = { name: acct.provider === "icloud" ? "iCloud" : "IMAP", host: acct.host, port: acct.port, tls: acct.tls, authHint: "app_password" as const };
+      const raw = this.makeTransport({ provider: acct.provider, email: acct.email, preset, credentials: creds });
+      adapter = new ImapAdapter({ transport: readOnly ? new ReadOnlyTransport(raw) : raw, providerName: preset.name });
+    }
     await adapter.connect();
     this.adapters.set(key, { adapter, at: Date.now() });
     return adapter;
+  }
+
+  /** Gmail / Outlook: tokens come from the secret store; while in Preview the HTTP guard is read-only. */
+  private oauthAdapter(provider: OAuthProvider, accountId: string, readOnly: boolean): MailAdapter {
+    const client = oauthClient(provider, this.env);
+    if (!client) throw new Error(missingConfigMessage(provider));
+    let tokens = this.tokens.get(accountId);
+    if (!tokens) {
+      tokens = new TokenManager({ cfg: PROVIDERS[provider], client, secrets: this.secrets, secretName: accountId, fetchFn: this.fetchFn });
+      this.tokens.set(accountId, tokens);
+    }
+    if (provider === "gmail") {
+      const ourLabelIds = new Set<string>();
+      const http = new GmailHttp({ tokens, fetchFn: this.fetchFn, ctx: { readOnly, allowedLabelIds: () => ourLabelIds } });
+      return new GmailAdapter({ http, ourLabelIds });
+    }
+    const ourFolderIds = new Set<string>();
+    const forbiddenFolderIds = new Set<string>();
+    const http = new GraphHttp({ tokens, fetchFn: this.fetchFn, ctx: { readOnly, ourFolderIds: () => ourFolderIds, forbiddenFolderIds: () => forbiddenFolderIds } });
+    return new OutlookAdapter({ http, ourFolderIds, forbiddenFolderIds });
   }
 
   isPreview(accountId: string): boolean {
@@ -123,7 +168,8 @@ export class Runtime {
     const acct = this.accounts.get(accountId);
     if (!acct) return null;
     const authToMove = this.liveStore.query({ bucket: "auth" }).filter((m) => m.accountId === accountId && m.folder === "INBOX").length;
-    return { accountId, email: acct.email, authToMove, willCreate: (["auth", "needs_review", "junk"] as const).map((b) => DEFAULT_BUCKET_FOLDERS[b]) };
+    const names = acct.provider === "gmail" ? GMAIL_LABELS : acct.provider === "outlook" ? OUTLOOK_FOLDERS : DEFAULT_BUCKET_FOLDERS;
+    return { accountId, email: acct.email, authToMove, willCreate: (["auth", "needs_review", "junk"] as const).map((b) => names[b]) };
   }
 
   /**

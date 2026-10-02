@@ -1,4 +1,4 @@
-import { applyFilingAction, cancelAccountAction, confirmAccountAction, previewOnAction, removeAccountAction, syncNowAction, testAccountAction } from "../actions";
+import { applyFilingAction, cancelAccountAction, confirmAccountAction, connectProviderAction, previewOnAction, removeAccountAction, syncNowAction, testAccountAction } from "../actions";
 import Notice, { param, SP } from "../../components/Notice";
 import { getRuntime } from "../../src/runtime/runtime";
 import { applyPlan, describePlan, JEV_BANNER, JEV_BANNER_DETAIL, pendingReport, PREVIEW_BANNER } from "../../src/ui/accountActions";
@@ -25,8 +25,15 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <ul className="space-y-3">
             {accounts.map((a) => (
               <li key={a.id} className="rounded border border-line bg-card p-3">
-                <p className="font-medium">{a.email} <span className="ml-2 text-xs text-muted">{a.provider === "icloud" ? "iCloud" : `IMAP (${a.host}:${a.port})`}</span></p>
+                <p className="font-medium">{a.email} <span className="ml-2 text-xs text-muted">{a.provider === "icloud" ? "iCloud" : a.provider === "gmail" ? "Gmail" : a.provider === "outlook" ? "Outlook" : `IMAP (${a.host}:${a.port})`}</span></p>
                 <p className="text-sm text-muted">{a.lastSyncAt ? `Last sync ${a.lastSyncAt.slice(0, 16).replace("T", " ")} UTC: ${a.lastSyncNote ?? ""}` : "Not synced yet."}</p>
+                {a.lastSyncStatus === "reconnect" ? (
+                  <form action={connectProviderAction} className="mt-2 rounded border border-danger p-2" aria-label={`Reconnect ${a.email}`}>
+                    <input type="hidden" name="returnTo" value="/settings" /><input type="hidden" name="provider" value={a.provider} /><input type="hidden" name="reconnectEmail" value={a.email} />
+                    <p role="alert" className="mb-2 text-sm text-danger">Reconnect required: access was revoked or expired. Nothing was changed in your mailbox.</p>
+                    <button type="submit" className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-fg">Reconnect {a.provider === "gmail" ? "Gmail" : "Outlook"}</button>
+                  </form>
+                ) : null}
                 <div className="mt-2 flex flex-wrap items-start gap-2">
                   <form action={syncNowAction}><input type="hidden" name="returnTo" value="/settings" /><button type="submit" className="rounded border border-line px-3 py-1 text-sm hover:bg-sel">Sync now</button></form>
                   {a.preview ? (() => {
@@ -42,7 +49,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                           ) : (
                             <p role="note" className="rounded border border-line px-2 py-1 text-sm text-muted">Press Sync now first to see how many messages would move.</p>
                           )}
-                          <p className="text-xs text-muted">Applying creates these folders on your mailbox: {plan?.willCreate.join(", ")}. Your other folders, including the server&apos;s Junk, are never written to, and no mail is ever deleted.</p>
+                          <p className="text-xs text-muted">Applying creates these folders or labels on your mailbox: {plan?.willCreate.join(", ")}. Your other folders, including the server&apos;s Junk, are never written to, and no mail is ever deleted.</p>
                           <button type="submit" className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-fg">Apply filing to my mailbox</button>
                         </form>
                       </details>
@@ -58,7 +65,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                     <summary className="cursor-pointer text-sm">Remove account&hellip;</summary>
                     <form action={removeAccountAction} className="mt-2 max-w-md space-y-2">
                       <input type="hidden" name="returnTo" value="/settings" /><input type="hidden" name="accountId" value={a.id} />
-                      <p role="note" className="rounded border border-warn px-2 py-1 text-sm">This deletes the password stored for this account and the data this app keeps about it on this computer. It does not touch any mail on the server. The Jev folders (Jev Auth, Jev Needs review, Jev Junk) stay on your mailbox, along with any mail already moved into them.</p>
+                      <p role="note" className="rounded border border-warn px-2 py-1 text-sm">This deletes the password stored for this account and the data this app keeps about it on this computer. It does not touch any mail on the server. The Jev folders or labels (Jev Auth, Jev Needs review, Jev Junk) stay on your mailbox, along with any mail already moved into them. For Gmail and Outlook, access also stays granted in your Google or Microsoft account until you revoke it there.</p>
                       <button type="submit" className="rounded border border-danger px-3 py-1 text-sm text-danger hover:bg-sel">Remove {a.email}</button>
                     </form>
                   </details>
@@ -126,14 +133,24 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             </form>
           </details>
 
-          <div className="rounded border border-line bg-card p-3">
-            <p className="font-medium">Gmail <span className="ml-2 rounded border border-line px-2 py-0.5 text-xs text-muted">Coming soon</span></p>
-            <p className="text-sm text-muted">Needs Google verification before a public release.</p>
-          </div>
-          <div className="rounded border border-line bg-card p-3">
-            <p className="font-medium">Outlook <span className="ml-2 rounded border border-line px-2 py-0.5 text-xs text-muted">Coming soon</span></p>
-            <p className="text-sm text-muted">Will use Microsoft Graph.</p>
-          </div>
+          {(["gmail", "outlook"] as const).map((p) => {
+            const label = p === "gmail" ? "Gmail" : "Outlook";
+            const cfg = rt.oauth.configured(p);
+            return (
+              <div key={p} className="rounded border border-line bg-card p-3">
+                <p className="font-medium">{label}</p>
+                {cfg.ok ? (
+                  <form action={connectProviderAction} className="mt-2" aria-label={`Connect ${label}`}>
+                    <input type="hidden" name="returnTo" value="/settings" /><input type="hidden" name="provider" value={p} />
+                    <p className="mb-2 text-sm text-muted">Signs in with {label} in your browser (PKCE). The account is added in Preview mode: nothing is created or moved until you apply filing.</p>
+                    <button type="submit" className={submit}>Connect {label}</button>
+                  </form>
+                ) : (
+                  <p role="note" className="mt-1 rounded border border-warn px-2 py-1 text-sm">{cfg.message}</p>
+                )}
+              </div>
+            );
+          })}
         </div>
       </section>
 

@@ -2,6 +2,7 @@
 // Server actions. They only parse the form, call the action layer in src/ui/actions.ts, and
 // redirect back with a notice. No gate or move logic lives here.
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import * as ui from "../src/ui/actions";
 import { getRuntime } from "../src/runtime/runtime";
@@ -124,4 +125,18 @@ export async function applyFilingAction(f: FormData): Promise<void> {
 /** Preview on: future syncs stop moving anything. Past moves are not undone. */
 export async function previewOnAction(f: FormData): Promise<void> {
   back(f, acct.previewOn(await getRuntime(), str(f, "accountId")), "/settings");
+}
+
+/** Start Gmail / Outlook sign-in (PKCE, loopback redirect). Or reconnect an account whose access was revoked. */
+export async function connectProviderAction(f: FormData): Promise<void> {
+  const provider = str(f, "provider") === "outlook" ? "outlook" : "gmail";
+  const rt = await getRuntime();
+  const host = (await headers()).get("host") ?? "";
+  let url: string;
+  try {
+    url = rt.oauth.begin(provider, host, str(f, "reconnectEmail") || undefined);
+  } catch (e) {
+    back(f, { kind: "error", text: e instanceof Error ? e.message : "Could not start sign-in." }, "/settings");
+  }
+  redirect(url);
 }

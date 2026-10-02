@@ -802,3 +802,10 @@ The following facts may have changed since design; confirm before implementation
 ## Summary
 
 Mail source integration is provider-specific at the transport layer (OAuth, IMAP, label APIs) but unified at the app layer via the MailAdapter interface. All providers apply the same never-junk gate and redaction rules on device. Credentials are encrypted locally and tokens are refreshed or revoked per provider. Sync uses push where available (Gmail Pub/Sub, Outlook webhooks) and falls back to polling (history IDs, delta queries, IDLE/UID polling). Junk bucket creation is attempted per provider; if it fails, the app falls back to Needs review. The never-junk gate ensures Auth mail is never auto-moved to the provider's spam folder, and codes and reset/verify links are redacted on device before jev.ai classification.
+
+## Implementation notes (build step 7: Gmail and Outlook)
+
+- Both adapters use plain `fetch` through a guarded HTTP client with an allow-list of calls. Gmail: no delete, trash, untrash or send; only our `Jev/*` labels plus INBOX may be added or removed; SPAM and TRASH are never read or touched. Graph: no DELETE; the Junk Email and Deleted Items folders are never read for filing, never a destination, and are only discovered by a read-only `$select=id` GET so they can be refused by id too.
+- Preview mode wraps the same clients read-only: any POST is refused before the network. Labels/folders are created only on Apply.
+- Updates are polled (no Pub/Sub, no webhooks), so verify-list items 1 and 2 do not apply yet. Items 5 (testing-mode refresh-token lifetime), 6 (history retention), 7 (delta token lifetime) and 9 (verification) still need checking against the providers' current docs; invalid grants surface as a "Reconnect required" state.
+- Outlook asks for `openid email` in addition to `Mail.ReadWrite` and `offline_access` only to learn the mailbox address (verify); the first sync tries `$deltatoken=latest` for a baseline (verify) and otherwise re-lists the newest messages.

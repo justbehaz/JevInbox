@@ -61,7 +61,7 @@ export function applyPlan(rt: Runtime, accountId: string): ApplyPlan | null {
 }
 
 export function describePlan(p: ApplyPlan): string {
-  const moves = `${p.authToMove} Auth message${p.authToMove === 1 ? "" : "s"} will move to Jev Auth.`;
+  const moves = `${p.authToMove} Auth message${p.authToMove === 1 ? "" : "s"} will move to ${p.willCreate[0] ?? "Jev Auth"}.`;
   return `${moves} Nothing will be junked or deleted.`;
 }
 
