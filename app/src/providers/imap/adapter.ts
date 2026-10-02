@@ -7,7 +7,7 @@ import { canMoveToJunk } from "../../gate/gate";
 import { buildSnippet } from "../../gate/redact";
 import { DEFAULT_BUCKET_FOLDERS, assertNotProviderSpam, isProviderSpamFolder, validateBucketNames } from "./folders";
 import { ImapAdapterError } from "./sanitize";
-import { ImapTransport, RawMessage } from "./transport";
+import { FolderInfo, ImapTransport, RawMessage } from "./transport";
 
 export const MOVED_KEYWORD = "$JevMoved";
 const BODY_SAMPLE_MAX = 4000;
@@ -148,6 +148,15 @@ export class ImapAdapter implements MailAdapter {
     let info: BucketInfo;
     try {
       const folders = await this.t.listFolders();
+      if (bucket === "archive") {
+        // Prefer the provider's own Archive / All Mail folder.
+        const own = folders.find((f) => f.specialUse === "\\Archive" || f.specialUse === "\\All");
+        if (own) {
+          info = { name, path: own.path, created: false };
+          this.buckets.set(bucket, info);
+          return info;
+        }
+      }
       assertNotProviderSpam(name, folders);
       const exists = folders.some((f) => f.path.toLowerCase() === name.toLowerCase());
       const created = exists ? false : await this.t.createFolder(name);
@@ -165,16 +174,22 @@ export class ImapAdapter implements MailAdapter {
     return info;
   }
 
+  /** Common checks before any move: not out of provider spam, id still valid. */
+  private async preflight(folder: string, messageId: string) {
+    const folders = await this.t.listFolders();
+    if (isProviderSpamFolder(folder, folders)) {
+      throw new ImapAdapterError("moves out of the provider spam folder are not done automatically");
+    }
+    const { validity, uid } = parseId(messageId);
+    const state = await this.t.folderState(folder);
+    if (state.uidValidity !== validity) throw new ImapAdapterError("stale message id (UIDVALIDITY changed)");
+    return { folders, uid };
+  }
+
   async moveToBucket(folder: string, messageId: string, bucket: BucketName): Promise<MoveResult> {
     const base = { messageId, originalLocation: folder };
     try {
-      const folders = await this.t.listFolders();
-      if (isProviderSpamFolder(folder, folders)) {
-        throw new ImapAdapterError("moves out of the provider spam folder are not done automatically");
-      }
-      const { validity, uid } = parseId(messageId);
-      const state = await this.t.folderState(folder);
-      if (state.uidValidity !== validity) throw new ImapAdapterError("stale message id (UIDVALIDITY changed)");
+      const { folders, uid } = await this.preflight(folder, messageId);
 
       // Adapter-level defence: whoever calls this, Auth or security-shaped mail never goes to Junk.
       if (bucket === "junk") {
@@ -188,39 +203,54 @@ export class ImapAdapter implements MailAdapter {
       if (info.inPlace || !info.path) {
         return { ...base, success: true, moved: false, destination: null, bucketUsed: null, method: "none" };
       }
-      // Final write guard: never write to provider spam, whatever the config says.
-      assertNotProviderSpam(info.path, folders.concat(info.created ? [{ path: info.path, delimiter: "/" }] : []));
-      const bucketUsed: BucketName = info.fallback ?? bucket;
-      if (info.path === folder) {
-        return { ...base, success: true, moved: false, destination: info.path, bucketUsed, method: "none" };
-      }
-
-      const caps = await this.t.capabilities();
-      if (caps.move) {
-        const r = await this.t.move(folder, uid, info.path);
-        return {
-          ...base, success: true, moved: true, destination: info.path, bucketUsed, method: "move",
-          newMessageId: r.destUid ? this.destId(info.path, r.destUid) : undefined,
-        };
-      }
-      // No MOVE: COPY, then flag the original with a harmless keyword. Never \Deleted, never EXPUNGE.
-      const r = await this.t.copy(folder, uid, info.path);
-      await this.t.setKeyword(folder, uid, MOVED_KEYWORD, true);
-      return {
-        ...base, success: true, moved: true, destination: info.path, bucketUsed, method: "copy_flag",
-        newMessageId: r.destUid ? this.destId(info.path, r.destUid) : undefined,
-      };
+      return await this.doMove(base, folder, uid, folders, info.path, info.fallback ?? bucket, info.created);
     } catch (e) {
-      return {
-        ...base, success: false, moved: false, destination: null, bucketUsed: null, method: "none",
-        error: e instanceof Error ? e.message : "move failed",
-      };
+      return this.failed(base, e);
     }
   }
 
-  // Destination ids need the destination's UIDVALIDITY; looked up lazily and only for undo.
-  private destId(path: string, uid: number): string {
-    return `${path}\u0000${uid}`;
+  /** Restore a message to INBOX (used by "Not junk" and by filing out of a bucket folder). */
+  async moveToInbox(folder: string, messageId: string): Promise<MoveResult> {
+    const base = { messageId, originalLocation: folder };
+    try {
+      const { folders, uid } = await this.preflight(folder, messageId);
+      return await this.doMove(base, folder, uid, folders, "INBOX", "inbox", false);
+    } catch (e) {
+      return this.failed(base, e);
+    }
+  }
+
+  private failed(base: { messageId: string; originalLocation: string }, e: unknown): MoveResult {
+    return {
+      ...base, success: false, moved: false, destination: null, bucketUsed: null, method: "none",
+      error: e instanceof Error ? e.message : "move failed",
+    };
+  }
+
+  private async doMove(
+    base: { messageId: string; originalLocation: string },
+    folder: string, uid: number, folders: FolderInfo[], dest: string,
+    bucketUsed: BucketName | "inbox", created: boolean,
+  ): Promise<MoveResult> {
+    // Final write guard: never write to provider spam, whatever the config says.
+    assertNotProviderSpam(dest, folders.concat(created ? [{ path: dest, delimiter: "/" }] : []));
+    if (dest === folder) return { ...base, success: true, moved: false, destination: dest, bucketUsed, method: "none" };
+
+    const caps = await this.t.capabilities();
+    let method: "move" | "copy_flag";
+    let destUid: number | undefined;
+    if (caps.move) {
+      destUid = (await this.t.move(folder, uid, dest)).destUid;
+      method = "move";
+    } else {
+      // No MOVE: COPY, then flag the original with a harmless keyword. Never \Deleted, never EXPUNGE.
+      destUid = (await this.t.copy(folder, uid, dest)).destUid;
+      await this.t.setKeyword(folder, uid, MOVED_KEYWORD, true);
+      method = "copy_flag";
+    }
+    let newMessageId: string | undefined;
+    if (destUid) newMessageId = idOf((await this.t.folderState(dest)).uidValidity, destUid);
+    return { ...base, success: true, moved: true, destination: dest, bucketUsed, method, newMessageId };
   }
 
   async undoMove(result: MoveResult): Promise<void> {
@@ -231,10 +261,9 @@ export class ImapAdapter implements MailAdapter {
       return; // original was never removed; the copy in the bucket is left (nothing is deleted)
     }
     if (result.method === "move" && result.newMessageId) {
-      const [path, uidStr] = result.newMessageId.split("\u0000");
       const caps = await this.t.capabilities();
       if (!caps.move) throw new ImapAdapterError("cannot reverse: MOVE not available");
-      await this.t.move(path, Number(uidStr), result.originalLocation);
+      await this.t.move(result.destination, parseId(result.newMessageId).uid, result.originalLocation);
       return;
     }
     throw new ImapAdapterError("cannot reverse: server did not report the new UID (UIDPLUS missing)");

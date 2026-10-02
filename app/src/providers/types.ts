@@ -2,7 +2,7 @@
 // Simplifications for the IMAP step: folder and message ids are strings; Message ids for IMAP
 // are "<uidValidity>:<uid>".
 
-export type BucketName = "auth" | "junk" | "needs_review";
+export type BucketName = "auth" | "junk" | "needs_review" | "archive";
 
 export interface MessageSummary {
   id: string;
@@ -52,7 +52,7 @@ export interface MoveResult {
   messageId: string;
   originalLocation: string;
   destination: string | null;
-  bucketUsed: BucketName | null;
+  bucketUsed: BucketName | "inbox" | null;
   /** How it was done: server MOVE, or COPY plus keyword flag (original kept, nothing deleted). */
   method: "move" | "copy_flag" | "none";
   newMessageId?: string;
@@ -90,6 +90,8 @@ export interface MailAdapter {
   ensureBucket(bucket: BucketName): Promise<BucketInfo>;
   /** Moves (never deletes). Falls back per 06: junk -> needs_review -> leave in place. */
   moveToBucket(folder: string, messageId: string, bucket: BucketName): Promise<MoveResult>;
+  /** Restore a message to the inbox. */
+  moveToInbox(folder: string, messageId: string): Promise<MoveResult>;
   /** Reverse a previous move. */
   undoMove(result: MoveResult): Promise<void>;
   watch(folder: string, callback: (e: MailEvent) => void): Promise<Watcher>;

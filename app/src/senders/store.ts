@@ -11,7 +11,7 @@ import { deterministicAuth, securityShape } from "../gate/detect";
 import { UserContext } from "../gate/types";
 import { normalizeSender, NormalizeOptions, rootDomain } from "./normalize";
 
-export type StoredBucket = "auth" | "junk" | "needs_review" | "category" | "inbox";
+export type StoredBucket = "auth" | "junk" | "needs_review" | "category" | "inbox" | "archived";
 
 export interface RecordInput {
   messageId: string;
@@ -25,6 +25,8 @@ export interface RecordInput {
   unread: boolean;
   bucket: StoredBucket;
   categoryId?: string;
+  /** Why it was filed (gate reason code or a user action). */
+  reason?: string;
   /** Original body sample. Used only to compute security flags; NEVER stored. */
   bodySample: string;
 }
@@ -59,6 +61,8 @@ export interface StoredMessage {
   starred: boolean;
   bucket: StoredBucket;
   categoryId: string | null;
+  reason: string | null;
+  senderName: string | null;
 }
 
 export interface DomainRollup {
@@ -75,7 +79,13 @@ export interface BucketBreakdownRow {
 }
 
 /** Moves one message into Junk (provider-side). Return success and the bucket actually used. */
-export type JunkMover = (m: { messageId: string; accountId: string; folder: string }) => Promise<{ success: boolean; bucketUsed?: "junk" | "needs_review" | "auth" | null }>;
+export type JunkMover = (m: { messageId: string; accountId: string; folder: string }) => Promise<{
+  success: boolean;
+  bucketUsed?: string | null;
+  /** Where the message lives now (so later actions use the right location). */
+  newMessageId?: string;
+  folder?: string | null;
+}>;
 
 export interface MarkJunkResult {
   moved: number;
@@ -108,12 +118,14 @@ CREATE TABLE IF NOT EXISTS messages (
   date        TEXT NOT NULL,
   unread      INTEGER NOT NULL DEFAULT 1,
   starred     INTEGER NOT NULL DEFAULT 0,
-  bucket      TEXT NOT NULL CHECK (bucket IN ('auth','junk','needs_review','category','inbox')),
+  bucket      TEXT NOT NULL CHECK (bucket IN ('auth','junk','needs_review','category','inbox','archived')),
   category_id TEXT,
   prev_bucket TEXT,
+  reason      TEXT,
   det_auth    INTEGER NOT NULL DEFAULT 0,
+  was_auth    INTEGER NOT NULL DEFAULT 0, -- sticky: this message was ever filed as Auth (even if archived since)
   sec_shape   INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (account_id, message_id)
+  PRIMARY KEY (account_id, folder, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_senders_root_domain ON senders(root_domain);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_date ON messages(sender_key, date DESC);
@@ -179,16 +191,16 @@ export class SenderStore {
       this.db
         .prepare(
           `INSERT INTO messages (message_id, account_id, folder, sender_key, subject, snippet, date, unread,
-                                 bucket, category_id, det_auth, sec_shape)
-           VALUES (@mid, @acct, @folder, @key, @subject, @snippet, @date, @unread, @bucket, @cat, @det, @shape)
-           ON CONFLICT(account_id, message_id) DO UPDATE SET
-             folder = @folder, bucket = @bucket, category_id = @cat, unread = @unread,
-             det_auth = MAX(det_auth, @det), sec_shape = MAX(sec_shape, @shape)`, // flags are sticky: a re-record can never clear them
+                                 bucket, category_id, reason, det_auth, was_auth, sec_shape)
+           VALUES (@mid, @acct, @folder, @key, @subject, @snippet, @date, @unread, @bucket, @cat, @reason, @det, @wasauth, @shape)
+           ON CONFLICT(account_id, folder, message_id) DO UPDATE SET
+             bucket = @bucket, category_id = @cat, reason = @reason, unread = @unread,
+             det_auth = MAX(det_auth, @det), was_auth = MAX(was_auth, @wasauth), sec_shape = MAX(sec_shape, @shape)`, // flags are sticky: a re-record can never clear them
         )
         .run({
           mid: m.messageId, acct: m.accountId ?? "default", folder: m.folder, key: id.key,
           subject: m.subject, snippet: m.snippet, date: m.date.toISOString(), unread: m.unread ? 1 : 0,
-          bucket: m.bucket, cat: m.categoryId ?? null, det: detAuth, shape: secShape,
+          bucket: m.bucket, cat: m.categoryId ?? null, reason: m.reason ?? null, det: detAuth, wasauth: m.bucket === "auth" ? 1 : 0, shape: secShape,
         });
       if (m.bucket === "auth" || detAuth) {
         this.db.prepare(`UPDATE senders SET auth_ever = 1, updated_at = ? WHERE sender_key = ?`).run(now, id.key);
@@ -259,6 +271,78 @@ export class SenderStore {
     return rows.map((r) => ({ ...r, unread: !!r.unread, starred: !!r.starred }));
   }
 
+  private static readonly MSG_COLS = `m.message_id AS messageId, m.account_id AS accountId, m.folder, m.sender_key AS senderKey,
+    m.subject, m.snippet, m.date, m.unread, m.starred, m.bucket, m.category_id AS categoryId, m.reason AS reason,
+    s.display_name AS senderName`;
+
+  /** List messages. hideMuted hides a muted sender's mail but never Auth mail. */
+  query(f: { bucket?: StoredBucket; categoryId?: string; senderKey?: string; hideMuted?: boolean; excludeBuckets?: StoredBucket[]; limit?: number } = {}): StoredMessage[] {
+    const rows = this.db
+      .prepare(
+        `SELECT ${SenderStore.MSG_COLS} FROM messages m JOIN senders s ON s.sender_key = m.sender_key
+         WHERE (@bucket IS NULL OR m.bucket = @bucket)
+           AND (@cat IS NULL OR m.category_id = @cat)
+           AND (@sender IS NULL OR m.sender_key = @sender)
+           AND (@hide = 0 OR s.muted = 0 OR m.bucket = 'auth')
+           AND (m.bucket NOT IN (SELECT value FROM json_each(@excl)))
+         ORDER BY m.date DESC, m.message_id DESC LIMIT @limit`,
+      )
+      .all({
+        bucket: f.bucket ?? null, cat: f.categoryId ?? null, sender: f.senderKey?.toLowerCase() ?? null,
+        hide: f.hideMuted ? 1 : 0, excl: JSON.stringify(f.excludeBuckets ?? []), limit: f.limit ?? 1_000_000,
+      }) as any[];
+    return rows.map((r) => ({ ...r, unread: !!r.unread, starred: !!r.starred }));
+  }
+
+  getMessage(accountId: string, folder: string, messageId: string): (StoredMessage & { detAuth: boolean; wasAuth: boolean; secShape: boolean }) | null {
+    const r = this.db
+      .prepare(`SELECT ${SenderStore.MSG_COLS}, m.det_auth AS detAuth, m.was_auth AS wasAuth, m.sec_shape AS secShape
+                FROM messages m JOIN senders s ON s.sender_key = m.sender_key WHERE m.account_id = ? AND m.folder = ? AND m.message_id = ?`)
+      .get(accountId, folder, messageId) as any;
+    return r ? { ...r, unread: !!r.unread, starred: !!r.starred, detAuth: !!r.detAuth, wasAuth: !!r.wasAuth, secShape: !!r.secShape } : null;
+  }
+
+  /** True for Auth mail and anything security-shaped: it may never be moved to Junk. */
+  isProtected(accountId: string, folder: string, messageId: string): boolean {
+    const m = this.getMessage(accountId, folder, messageId);
+    return !!m && (m.bucket === "auth" || m.wasAuth || m.detAuth || m.secShape);
+  }
+
+  /** Counts for navigation: per system bucket and per category id. */
+  bucketCounts(hideMuted = true): { buckets: Record<string, { count: number; unread: number }>; categories: Record<string, { count: number; unread: number }> } {
+    const rows = this.db
+      .prepare(
+        `SELECT m.bucket AS bucket, m.category_id AS cat, COUNT(*) AS count, COALESCE(SUM(m.unread), 0) AS unread
+         FROM messages m JOIN senders s ON s.sender_key = m.sender_key
+         WHERE (? = 0 OR s.muted = 0 OR m.bucket = 'auth') GROUP BY m.bucket, m.category_id`,
+      )
+      .all(hideMuted ? 1 : 0) as Array<{ bucket: string; cat: string | null; count: number; unread: number }>;
+    const out = { buckets: {} as Record<string, { count: number; unread: number }>, categories: {} as Record<string, { count: number; unread: number }> };
+    for (const r of rows) {
+      const b = (out.buckets[r.bucket] ??= { count: 0, unread: 0 });
+      b.count += r.count; b.unread += r.unread;
+      if (r.bucket === "category" && r.cat) {
+        const c = (out.categories[r.cat] ??= { count: 0, unread: 0 });
+        c.count += r.count; c.unread += r.unread;
+      }
+    }
+    return out;
+  }
+
+  /** Record a message's new place after a move or user action. Never deletes. */
+  updateLocation(accountId: string, folder: string, messageId: string, patch: { newMessageId?: string; folder?: string | null; bucket: StoredBucket; categoryId?: string | null; reason?: string }): void {
+    const m = this.db.prepare(`SELECT sender_key AS k, bucket FROM messages WHERE account_id = ? AND folder = ? AND message_id = ?`).get(accountId, folder, messageId) as { k: string; bucket: string } | undefined;
+    if (!m) throw new Error("unknown message");
+    this.db
+      .prepare(
+        `UPDATE messages SET prev_bucket = bucket, was_auth = MAX(was_auth, CASE WHEN bucket = 'auth' OR @bucket = 'auth' THEN 1 ELSE 0 END), bucket = @bucket, category_id = @cat, reason = COALESCE(@reason, reason),
+           folder = COALESCE(@folder, folder), message_id = COALESCE(@nid, message_id)
+         WHERE account_id = @acct AND folder = @oldFolder AND message_id = @mid`,
+      )
+      .run({ bucket: patch.bucket, cat: patch.categoryId ?? null, reason: patch.reason ?? null, folder: patch.folder ?? null, nid: patch.newMessageId ?? null, acct: accountId, oldFolder: folder, mid: messageId });
+    if (patch.bucket === "auth") this.db.prepare(`UPDATE senders SET auth_ever = 1 WHERE sender_key = ?`).run(m.k);
+  }
+
   // ---------------------------------------------------------------- gate wiring
   /** Gate inputs derived from sender actions. Reply history comes from the caller (Sent folder). */
   userContext(hasRepliedTo: (address: string) => boolean = () => false): UserContext {
@@ -313,20 +397,19 @@ export class SenderStore {
     const key = senderKey.toLowerCase();
     this.act(key, "mark"); // allowlist and junk mark are exclusive
     const rows = this.db
-      .prepare(`SELECT message_id AS messageId, account_id AS accountId, folder, bucket, det_auth AS detAuth, sec_shape AS secShape
+      .prepare(`SELECT message_id AS messageId, account_id AS accountId, folder, bucket, det_auth AS detAuth, was_auth AS wasAuth, sec_shape AS secShape
                 FROM messages WHERE sender_key = ? ORDER BY date`)
-      .all(key) as Array<{ messageId: string; accountId: string; folder: string; bucket: StoredBucket; detAuth: number; secShape: number }>;
+      .all(key) as Array<{ messageId: string; accountId: string; folder: string; bucket: StoredBucket; detAuth: number; wasAuth: number; secShape: number }>;
     const result: MarkJunkResult = { moved: 0, skippedAuth: 0, skippedSecurityShape: 0, failed: 0, alreadyJunk: 0 };
     for (const r of rows) {
-      if (r.bucket === "auth" || r.detAuth) { result.skippedAuth++; continue; }
+      if (r.bucket === "auth" || r.detAuth || r.wasAuth) { result.skippedAuth++; continue; }
       if (r.secShape) { result.skippedSecurityShape++; continue; }
       if (r.bucket === "junk") { result.alreadyJunk++; continue; }
       let res;
       try { res = await mover({ messageId: r.messageId, accountId: r.accountId, folder: r.folder }); } catch { res = { success: false }; }
       if (!res.success) { result.failed++; continue; }
       const newBucket: StoredBucket = res.bucketUsed === "needs_review" ? "needs_review" : res.bucketUsed === "auth" ? "auth" : "junk";
-      this.db.prepare(`UPDATE messages SET prev_bucket = bucket, bucket = ? WHERE account_id = ? AND message_id = ?`)
-        .run(newBucket, r.accountId, r.messageId);
+      this.updateLocation(r.accountId, r.folder, r.messageId, { bucket: newBucket, newMessageId: res.newMessageId, folder: res.folder ?? null, reason: "sender_marked_junk" });
       result.moved++;
     }
     return result;

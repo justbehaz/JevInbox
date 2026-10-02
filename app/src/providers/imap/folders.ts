@@ -5,6 +5,7 @@ export const DEFAULT_BUCKET_FOLDERS: Record<BucketName, string> = {
   auth: "Jev Auth",
   junk: "Jev Junk",
   needs_review: "Jev Needs review",
+  archive: "Archive",
 };
 
 const SPAM_SPECIAL_USE = new Set(["\\junk", "\\trash"]);

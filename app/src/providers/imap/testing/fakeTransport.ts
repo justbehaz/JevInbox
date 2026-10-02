@@ -34,6 +34,7 @@ export class FakeImapTransport implements ImapTransport {
     this.addFolder("Sent", "\\Sent");
     this.addFolder("Junk", "\\Junk");
     this.addFolder("Trash", "\\Trash");
+    this.addFolder("Archive", "\\Archive");
     for (const f of opts.folders ?? []) this.addFolder(f.path, f.specialUse);
   }
 
