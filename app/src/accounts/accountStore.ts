@@ -4,7 +4,7 @@ import type Database from "better-sqlite3";
 import { TlsMode } from "../providers/imap/presets";
 import { entryName } from "../secrets/store";
 
-export type AccountProvider = "icloud" | "imap";
+export type AccountProvider = "icloud" | "imap" | "gmail" | "outlook";
 
 export interface AccountRow {
   id: string; // = entry name, e.g. jev-inbox-icloud-user@example.com
@@ -16,7 +16,7 @@ export interface AccountRow {
   createdAt: string;
   cursor: string | null;
   lastSyncAt: string | null;
-  lastSyncStatus: "ok" | "error" | null;
+  lastSyncStatus: "ok" | "error" | "reconnect" | null;
   lastSyncNote: string | null;
   /** Preview mode: sync records in the app only; the server gets no writes. On by default. */
   preview: boolean;
@@ -64,7 +64,7 @@ export class AccountStore {
   setCursor(id: string, cursor: string): void {
     this.db.prepare(`UPDATE accounts SET cursor = ? WHERE id = ?`).run(cursor, id);
   }
-  recordSync(id: string, status: "ok" | "error", note: string): void {
+  recordSync(id: string, status: "ok" | "error" | "reconnect", note: string): void {
     this.db.prepare(`UPDATE accounts SET last_sync_at = ?, last_sync_status = ?, last_sync_note = ? WHERE id = ?`).run(new Date().toISOString(), status, note, id);
   }
   setPreview(id: string, on: boolean): void {

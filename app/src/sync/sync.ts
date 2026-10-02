@@ -10,7 +10,8 @@ import { scrub } from "../providers/imap/sanitize";
 import { SenderStore } from "../senders/store";
 import { recordOutcome } from "../senders/wiring";
 import { CategoryManager } from "../categories/manager";
-import type { ImapAdapter } from "../providers/imap/adapter";
+import { ReconnectRequiredError } from "../oauth/tokens";
+import type { MailAdapter } from "../providers/types";
 
 export interface SyncSummary {
   accountId: string;
@@ -26,7 +27,7 @@ export interface SyncDeps {
   accounts: AccountStore;
   store: SenderStore;
   categories: CategoryManager;
-  adapterFor: (accountId: string) => Promise<ImapAdapter>;
+  adapterFor: (accountId: string) => Promise<MailAdapter>;
   jev?: JevClient;
   jevConnected?: boolean;
   folder?: string;
@@ -82,12 +83,12 @@ export class SyncService {
         if (!o.move?.moved) summary.leftInPlace++;
         if (o.error) summary.error = o.error;
       }
-      this.d.accounts.setCursor(accountId, res.cursor);
+      if (res.cursor) this.d.accounts.setCursor(accountId, res.cursor);
       const note = `${summary.processed} new: ${summary.auth} Auth, ${summary.needsReview} Needs review, ${summary.leftInPlace} left in place${acct.preview ? " (Preview: nothing moved)" : ""}`;
       this.d.accounts.recordSync(accountId, summary.error ? "error" : "ok", summary.error ? `${note}; ${scrub(summary.error, []).slice(0, 120)}` : note);
     } catch (e) {
       summary.error = scrub(e instanceof Error ? e.message : "sync failed", []).slice(0, 200);
-      this.d.accounts.recordSync(accountId, "error", summary.error);
+      this.d.accounts.recordSync(accountId, e instanceof ReconnectRequiredError ? "reconnect" : "error", summary.error);
     }
     return summary;
   }

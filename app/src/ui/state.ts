@@ -2,7 +2,7 @@
 // mailbox or the user's saved accounts.
 import type { CategoryManager } from "../categories/manager";
 import type { JevClient } from "../jev/types";
-import type { ImapAdapter } from "../providers/imap/adapter";
+import type { MailAdapter } from "../providers/types";
 import type { SenderStore } from "../senders/store";
 import { getRuntime } from "../runtime/runtime";
 
@@ -15,7 +15,7 @@ export interface AppState {
   /** False until the real jev.ai client exists: deterministic rules only. */
   jevConnected: boolean;
   /** A connected adapter for one account (cached). */
-  adapterFor(accountId: string): Promise<ImapAdapter>;
+  adapterFor(accountId: string): Promise<MailAdapter>;
   /** Preview mode: filing is recorded in the app only and nothing is written to the server. */
   isPreview(accountId: string): boolean;
   accountIds(): string[];

@@ -46,7 +46,7 @@ export interface MessageOutcome {
 export interface PipelineResult {
   outcomes: MessageOutcome[];
   /** Advances only past messages that were fully handled. */
-  cursor: string;
+  cursor: string | undefined;
   resync: boolean;
 }
 
@@ -64,7 +64,7 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
   const truncated = o.maxBatch !== undefined && full.messages.length > o.maxBatch;
   const list = truncated ? { ...full, messages: full.messages.slice(0, o.maxBatch) } : full;
   const outcomes: MessageOutcome[] = [];
-  let safeCursor = o.cursor ?? list.cursor.split(":")[0] + ":0";
+  let lastHandled: string | null = null;
   let failed = false;
 
   for (const summary of list.messages) {
@@ -121,8 +121,9 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
     }
     outcomes.push(outcome);
     if (outcome.error) failed = true;
-    if (!failed) safeCursor = `${list.cursor.split(":")[0]}:${summary.id.split(":")[1]}`;
+    if (!failed) lastHandled = summary.id;
   }
 
-  return { outcomes, cursor: failed || truncated ? safeCursor : list.cursor, resync: list.resync };
+  const cursor = failed || truncated ? o.adapter.partialCursor(o.cursor, list.cursor, lastHandled) : list.cursor;
+  return { outcomes, cursor, resync: list.resync };
 }

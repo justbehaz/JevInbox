@@ -115,6 +115,13 @@ export class ImapAdapter implements MailAdapter {
     };
   }
 
+  /** UID cursors can resume right after the last message that was fully handled. */
+  partialCursor(prev: string | undefined, listCursor: string, lastHandledId: string | null): string | undefined {
+    const validity = listCursor.split(":")[0];
+    if (lastHandledId) return `${validity}:${lastHandledId.split(":")[1]}`;
+    return prev ?? `${validity}:0`;
+  }
+
   async fetchHeadersAndSnippet(folder: string, messageId: string): Promise<MessageDetail> {
     await this.guardReadable(folder);
     const { validity, uid } = parseId(messageId);

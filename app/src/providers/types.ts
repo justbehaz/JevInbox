@@ -91,6 +91,11 @@ export interface MailAdapter {
   ensureBucket(bucket: BucketName): Promise<BucketInfo>;
   /** Moves (never deletes). Falls back per 06: junk -> needs_review -> leave in place. */
   moveToBucket(folder: string, messageId: string, bucket: BucketName): Promise<MoveResult>;
+  /**
+   * Cursor to store when a run was cut short (a move failed, or the batch was capped). IMAP can resume
+   * mid-way (UID cursors). History/delta based providers keep the previous cursor and reprocess.
+   */
+  partialCursor(prev: string | undefined, listCursor: string, lastHandledId: string | null): string | undefined;
   /** Restore a message to the inbox. */
   moveToInbox(folder: string, messageId: string): Promise<MoveResult>;
   /** Reverse a previous move. */

@@ -35,7 +35,7 @@ export async function createDemoState(): Promise<DemoAppState> {
 }
 
 /** Fetch -> redact -> never-junk gate -> move -> store, with the scripted stand-in for jev.ai. */
-export async function ingestDemo(state: DemoAppState, cursor?: string): Promise<string> {
+export async function ingestDemo(state: DemoAppState, cursor?: string): Promise<string | undefined> {
   const res = await runPipeline({
     adapter: state.adapter, folder: state.inboxFolder, jev: state.jev, user: state.store.userContext(), cursor,
     gateOptions: { categories: state.categories.enabled() },
