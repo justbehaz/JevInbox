@@ -206,10 +206,10 @@ else:
 
 ---
 
-## No Silent Delete, No Auto-Purge
+## No Delete, No Auto-Purge
 
-1. **Junk is a review queue.** Messages routed to Junk are not auto-deleted. The user can review and delete in bulk from the Junk view.
-2. **No auto-purge by age.** Junk mail does not expire and auto-delete after N days. Manual deletion only.
+1. **Junk is a review queue.** Messages routed to Junk are not auto-deleted. The user can review the Junk view and choose Not junk (restore, optionally allowlisting the sender), Keep in Junk, or Archive (move to the provider's own Archive folder, or All Mail in Gmail; reversible). The app never deletes mail.
+2. **No auto-purge by age.** Junk mail does not expire and auto-delete after N days. The app never deletes mail; Junk only shrinks when the user acts (Not junk or Archive).
 3. **No training from odd subject lines.** Do not mark a message junk solely because it has an unusual subject line. If jev.ai junk confidence is low or the message has no other spam signals, it goes to Needs review.
 
 ---

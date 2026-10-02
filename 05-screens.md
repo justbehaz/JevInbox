@@ -8,7 +8,8 @@ This document specifies the user-facing screens and interactions for Jev Inbox, 
 - Auth mail (system bucket) is never visible in Junk view.
 - Manual move of Auth mail to Junk is blocked with explanation.
 - Bulk move to Junk skips Auth messages and notifies the user.
-- Junk is a review queue with three actions: Keep, Mark junk (denylist), Allow sender.
+- Junk is a review queue with three per-message actions: Not junk (with optional allow sender), Keep in Junk, Archive.
+- Jev Inbox never deletes messages; archived messages remain accessible in provider's Archive folder.
 - User categories cap at 48 (36 defaults + 12 custom max; disabled categories count until deleted).
 - Disabled categories count toward the 48-category limit.
 - Sender view is a local read-only index (not a category, not counted in cap).
@@ -212,7 +213,7 @@ Opened when user clicks on a sender card from the inbox summary. Displays every 
 - **Star icon:** Toggle star on message.
 - **Bulk actions (after selecting ≥1 message):**
   - "Mark as read/unread".
-  - "Delete" (soft delete, moved to trash/deleted items).
+  - "Archive" — Move to provider's Archive folder; reversible.
   - "Move to category" — Show category list; moving Auth mail is blocked with explanation (see below).
   - "Mark junk" — For Needs review or category; blocked for Auth with explanation.
 - **Sender actions ([Allow], [Mark junk], [Mute]):** See section 6 (Sender Actions) for dialog details.
@@ -257,7 +258,7 @@ Opened when user clicks a message from the message list or from a category view.
 │            code and password reset link, which are   │
 │            security-critical."                       │
 │                                                       │
-│ [⭐ Star] [Mark as read] [Delete] [Move to...] [...] │
+│ [⭐ Star] [Mark as read] [Archive] [Move to...] [...] │
 │                                                       │
 ├──────────────────────────────────────────────────────┤
 │                                                       │
@@ -278,12 +279,12 @@ Opened when user clicks a message from the message list or from a category view.
 - **Category badge and explanation:**
   - **Auth bucket:** Immutable badge "Auth" (blue). No explanation; user knows this is security mail.
   - **Junk bucket:** Badge "Junk" (red). "This message was identified as probable spam or abuse."
-  - **Needs review bucket:** Badge "Needs review" (orange). "This message couldn't be classified with confidence. You can move it to a category or delete it."
+  - **Needs review bucket:** Badge "Needs review" (orange). "This message couldn't be classified with confidence. You can move it to a category or archive it."
   - **User category:** Badge with category name and color. "Confidence: 98%". Explanation line: "Why filed: This message matches the [Category Name] category because [reason based on jev.ai].".
 - **Action buttons:**
   - [⭐ Star] — Toggle star.
   - [Mark as read/unread] — Toggle read status.
-  - [Delete] — Soft delete (move to trash).
+  - [Archive] — Move to provider's Archive folder (e.g., All Mail in Gmail); reversible via Undo toast or Archive view.
   - [Move to category ▼] — Dropdown to move to a different bucket/category.
     - **If Auth:** Button is grayed out or absent. Tooltip: "Security mail cannot be moved from Auth."
   - [...] — More options (Report phishing, View headers, etc.).
@@ -354,7 +355,7 @@ Opened when user clicks on a category in the sidebar (e.g., "Promotions", "Work"
   - Grouped by From address (sender).
   - Each message shows: sender name, subject/snippet, category badge, date, unread indicator.
   - Can also be displayed as a flat list without grouping (UX decision).
-- **Bulk actions:** Select multiple messages, then show menu (Mark as read, Delete, Move to category, Mark junk).
+- **Bulk actions:** Select multiple messages, then show menu (Mark as read, Archive, Move to category, Mark junk).
 
 ### Interactions
 
@@ -364,7 +365,7 @@ Opened when user clicks on a category in the sidebar (e.g., "Promotions", "Work"
 
 ### States
 
-- **Empty category:** "No messages in [Category]. Messages may have been deleted or moved."
+- **Empty category:** "No messages in [Category]. Messages may have been archived or moved."
 - **Loading:** Spinner; "Loading messages...".
 - **Error:** "Failed to load messages. Please refresh."
 - **All read:** No unread indicator.
@@ -415,7 +416,7 @@ Opened when user clicks "Auth" in the sidebar. Shows all authentication and acco
 
 - **Click message:** Open message detail view (read-only; no "Move to" option).
 - **Click sender card:** Open "All from this sender" view, pre-filtered to Auth bucket.
-- **Delete button:** Users can delete Auth mail, but cannot move it to Junk.
+- **Archive button:** Users can archive Auth mail; cannot move it to Junk.
 
 ### States
 
@@ -435,16 +436,15 @@ Opened when user clicks "Auth" in the sidebar. Shows all authentication and acco
 
 ### Layout
 
-Opened when user clicks "Junk" in the sidebar. Displays all probable spam/abuse mail with three actions: Keep (restore), Mark junk (denylist sender), Allow sender (allowlist).
+Opened when user clicks "Junk" in the sidebar. Displays all probable spam/abuse mail with three actions per message: Not junk (restore with optional allow sender), Keep in Junk, or Archive.
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │ Junk                                                 │
 ├──────────────────────────────────────────────────────┤
 │ ⚠️  Security mail (Auth) is never in this folder.    │
-│    You can review messages and restore them or       │
-│    mark senders as junk. Deleted mail cannot be      │
-│    recovered.                                        │
+│    Jev Inbox never deletes mail. You can mark a     │
+│    message Not junk, keep it here, or archive it.   │
 ├──────────────────────────────────────────────────────┤
 │ [Search senders] [Sort ▼] [Filter ▼] [Select all ☐] │
 ├──────────────────────────────────────────────────────┤
@@ -452,18 +452,18 @@ Opened when user clicks "Junk" in the sidebar. Displays all probable spam/abuse 
 │ ☐ Unknown Sender                  Sep 28  15:45      │
 │    attacker@malicious.com                           │
 │    "Re: Claim your prize now!"                       │
-│    [Keep] [Mark junk] [Allow sender]                │
+│    [Not junk ☐ Allow sender] [Keep] [Archive]       │
 │                                                       │
 │ ☐ phishing@fake-bank.com           Sep 26  10:15     │
 │    "Verify your banking details"                    │
-│    [Keep] [Mark junk] [Allow sender]                │
+│    [Not junk ☐ Allow sender] [Keep] [Archive]       │
 │                                                       │
 │ ☐ newsletter@unwanted.com          Sep 20           │
 │    "Weekly digest subscription (12 more from this)  │
-│    [Keep] [Mark junk] [Allow sender]                │
+│    [Not junk ☐ Allow sender] [Keep] [Archive]       │
 │                                                       │
 │ [Bulk actions: Select ≥1 message]                    │
-│ [Restore selected] [Delete selected] [Allow sender] │
+│ [Restore selected] [Archive selected]               │
 │                                                       │
 └──────────────────────────────────────────────────────┘
 ```
@@ -472,7 +472,7 @@ Opened when user clicks "Junk" in the sidebar. Displays all probable spam/abuse 
 
 Display prominently at the top:
 
-**Copy:** "Security mail (Auth) is never in this folder. You can review messages and restore them to your inbox, mark senders as junk, or permanently delete. Deleted mail cannot be recovered."
+**Copy:** "Security mail (Auth) is never in this folder. Jev Inbox never deletes mail. You can mark a message Not junk, keep it here, or archive it."
 
 ### Components
 
@@ -483,31 +483,32 @@ Display prominently at the top:
   - Date.
   - Subject/snippet.
   - **Action buttons (per row):**
-    - [Keep] — Restore message to its original category or Needs review.
-    - [Mark junk] — Denylist sender; confirm dialog (see section below).
-    - [Allow sender] — Allowlist sender; confirm dialog.
+    - [Not junk] — Restore message to its original category or Needs review.
+      - Checkbox (unchecked by default): "Also always allow mail from this sender" — If checked, sender is added to allowlist.
+    - [Keep in Junk] — Leave message in Junk, dismiss without action.
+    - [Archive] — Move message to provider's Archive folder (e.g., All Mail in Gmail); reversible via Undo toast or Archive view.
 - **Bulk actions (after selecting ≥1):**
-  - [Restore selected] — Restore all selected messages to their original categories.
-  - [Delete selected] — Permanently delete selected messages (confirm with user).
-  - [Allow sender] — Allowlist sender of selected messages (dialog).
-  - [Mark junk] — Denylist sender of selected messages (dialog).
+  - [Restore selected] — Restore all selected messages to their original categories or Needs review.
+  - [Archive selected] — Move all selected messages to provider's Archive folder.
 
 ### Interactions
 
-- **[Keep] button:** Restore message; update UI (remove from list or show success toast).
-- **[Mark junk] button:** Open "Mark sender as junk" dialog (see section 8 below).
-- **[Allow sender] button:** Open "Allow sender" dialog (see section 9 below).
-- **[Restore selected] bulk action:** Restore all selected messages; show count ("Restored 5 messages").
-- **[Delete selected] bulk action:** Confirm deletion ("Permanently delete 5 messages? This cannot be undone.") then delete.
+- **[Not junk] button:** Restore message to original category or Needs review; if "Also allow sender" checkbox is checked, add sender to allowlist; update UI (remove from list or show success toast).
+- **[Keep in Junk] button:** Keep message in Junk; dismiss without action; update UI.
+- **[Archive] button:** Move message to provider's Archive folder; show Undo toast.
+- **[Restore selected] bulk action:** Restore all selected messages to their original categories or Needs review; show count ("Restored 5 messages").
+- **[Archive selected] bulk action:** Move all selected messages to provider's Archive folder; show count ("Archived 5 messages") with Undo option.
 
 ### States
 
 - **Empty Junk folder:** "No junk messages. Great job keeping your inbox clean!"
 - **Loading:** Spinner; "Loading junk messages...".
 - **Error:** "Failed to load junk messages. Please refresh."
-- **Message restored:** Toast notification "Restored message from [Sender].".
+- **Message restored:** Toast notification "Restored message from [Sender]. [Undo]".
+- **Message archived:** Toast notification "Archived message from [Sender]. [Undo]".
 - **Sender allowed:** Toast notification "[Sender] is now allowlisted. Future mail will be filed normally.".
-- **Sender marked junk:** Toast notification "[Sender] is now marked junk. Future mail will go to Junk.".
+- **Bulk restored:** Toast notification "Restored 5 messages. [Undo]".
+- **Bulk archived:** Toast notification "Archived 5 messages. [Undo]".
 
 ### Accessibility
 
@@ -658,7 +659,7 @@ Opened when user clicks "Needs review" in the sidebar. Shows unclassified mail a
 ├──────────────────────────────────────────────────────┤
 │ ℹ️  Messages here couldn't be classified with        │
 │   confidence or encountered an error. Review and     │
-│   file them to a category, or delete.                │
+│   file them to a category, archive, or keep here.    │
 ├──────────────────────────────────────────────────────┤
 │ [Search senders] [Sort ▼] [Filter ▼] [Select all ☐] │
 ├──────────────────────────────────────────────────────┤
@@ -682,7 +683,7 @@ Opened when user clicks "Needs review" in the sidebar. Shows unclassified mail a
 
 - **Header:** "Needs review" or "Unclassified".
 - **Informational banner:** Explain the reason for this queue.
-  - Copy: "Messages here couldn't be classified with confidence or encountered an error. Review them and file to a category, delete, or keep in Needs review."
+  - Copy: "Messages here couldn't be classified with confidence or encountered an error. Review them and file to a category, archive, or keep in Needs review."
 - **Controls:** Search, sort, filter, select all.
 - **Message rows:**
   - Sender name, address, date, subject/snippet.
@@ -691,21 +692,22 @@ Opened when user clicks "Needs review" in the sidebar. Shows unclassified mail a
   - **Action buttons:**
     - [Move to category ▼] — Dropdown showing all user categories.
     - [Keep] — Keep in Needs review (dismiss).
-    - [Delete] — Delete message.
-- **Bulk actions:** Move selected to category, delete selected, keep selected.
+    - [Archive] — Move message to provider's Archive folder.
+- **Bulk actions:** Move selected to category, archive selected, keep selected.
 
 ### Interactions
 
 - **[Move to category ▼]:** Show category dropdown; user selects a category. Message is moved and removed from view.
 - **[Keep]:** Message stays in Needs review; button is disabled or shows "Kept".
-- **[Delete]:** Delete message (confirm with user).
+- **[Archive]:** Move message to provider's Archive folder; show Undo toast.
 
 ### States
 
 - **Empty Needs review:** "Inbox is all caught up! No messages need review."
 - **Loading:** Spinner; "Loading messages...".
 - **Error:** "Failed to load messages. Please refresh."
-- **Message moved:** Toast: "Moved message to [Category].".
+- **Message moved:** Toast: "Moved message to [Category]. [Undo]".
+- **Message archived:** Toast: "Archived message. [Undo]".
 
 ### Accessibility
 
@@ -892,7 +894,7 @@ Opened when user clicks "Manage categories" or "Categories ⚙" in the sidebar.
   - **Disabled Categories:**
     - List all disabled categories (if any).
     - Per category: checkbox [ ], category name (grayed out), [Edit] button, [Enable] button.
-  - **Note on disabled categories:** "Disabled categories count toward the 48-category limit. To free up space, delete a disabled category (permanent) or enable it."
+  - **Note on disabled categories:** "Disabled categories count toward the 48-category limit. To free up space, delete a disabled category (messages are moved to Needs review) or enable it."
 
 ### Actions
 
@@ -938,7 +940,7 @@ Opened when user clicks "Manage categories" or "Categories ⚙" in the sidebar.
   ├─────────────────────────────────────┤
   │ This cannot be undone. Messages in  │
   │ this category will be moved to      │
-  │ Needs review.                       │
+  │ Needs review (never deleted).       │
   │                                     │
   │ [Cancel] [Delete]                   │
   └─────────────────────────────────────┘
@@ -1138,25 +1140,6 @@ Opened when user clicks "Settings" in the sidebar.
 
 ---
 
-### Delete Confirmation
-
-**Trigger:** User clicks [Delete] on message or bulk-deletes messages.
-
-**Dialog:**
-
-```
-┌─────────────────────────────────────────────────────┐
-│ Delete message?                                     │
-├─────────────────────────────────────────────────────┤
-│ This message will be moved to trash. You can still  │
-│ recover it from trash.                              │
-│                                                     │
-│ [Cancel] [Delete]                                   │
-└─────────────────────────────────────────────────────┘
-```
-
----
-
 ### Junk Connection Failure Banner
 
 **Trigger:** Jev.ai classifier is unavailable.
@@ -1264,7 +1247,7 @@ Opened when user clicks "Settings" in the sidebar.
 
 ### Junk Queue Banner (Junk View)
 
-**Copy:** "Security mail (Auth) is never in this folder. You can review messages and restore them to your inbox, mark senders as junk, or permanently delete. Deleted mail cannot be recovered."
+**Copy:** "Security mail (Auth) is never in this folder. Jev Inbox never deletes mail. You can mark a message Not junk, keep it here, or archive it."
 
 **Styling:** Alert banner (⚠️) with orange/red border, displayed at the top of the Junk view.
 
@@ -1351,9 +1334,9 @@ This screen spec defines the complete Jev Inbox web app UX, with emphasis on:
 
 1. **Safety:** Auth mail is never rendered in Junk; manual and bulk moves are blocked or skipped with explanations.
 2. **Clarity:** Every screen displays full sender addresses (for spoofing protection) and explains why mail is in a bucket/category.
-3. **Control:** Users can manage categories (rename, disable, delete), allowlist/denylist senders, and take explicit actions (Keep, Mark junk, Allow).
+3. **Control:** Users can manage categories (rename, disable, delete), allowlist/denylist senders, and take explicit actions on Junk (Not junk, Keep in Junk, Archive).
 4. **Accessibility:** Full WCAG 2.1 AA compliance with semantic HTML, keyboard navigation, screen reader support, and ARIA labels.
 5. **Reliability:** Error states, loading states, and connection-failure banners guide users when classification is unavailable.
-6. **Transparency:** Junk is a review queue, not auto-delete; low-confidence mail routes to Needs review; thresholds are displayed (read-only).
+6. **Transparency:** Jev Inbox never deletes messages; Junk is a review queue; low-confidence mail routes to Needs review; thresholds are displayed (read-only).
 
 Each screen enforces the never-junk gate at the UI level, ensuring Auth mail remains accessible and user intent is always explicit.
