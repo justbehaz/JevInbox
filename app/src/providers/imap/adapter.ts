@@ -93,9 +93,15 @@ export class ImapAdapter implements MailAdapter {
     return { id: idOf(validity, m.uid), folder, from: m.from, subject: m.subject, date: m.date, unread: m.unread };
   }
 
-  async listMessages(folder: string, o: { cursor?: string } = {}): Promise<ListResult> {
+  async listMessages(folder: string, o: { cursor?: string; initialLimit?: number } = {}): Promise<ListResult> {
     await this.guardReadable(folder);
     const state = await this.t.folderState(folder);
+    if (!o.cursor && o.initialLimit) {
+      // First sync: only the newest N; older mail is not processed. The cursor points at the newest.
+      const latest = (await this.t.fetchLatest(folder, o.initialLimit)).sort((a, b) => a.uid - b.uid);
+      const top = latest.length ? latest[latest.length - 1].uid : 0;
+      return { messages: latest.map((m) => this.summary(folder, state.uidValidity, m)), cursor: `${state.uidValidity}:${top}`, resync: false };
+    }
     const cur = parseCursor(o.cursor);
     const resync = !!cur && cur.validity !== state.uidValidity;
     const after = cur && !resync ? cur.lastUid : 0;

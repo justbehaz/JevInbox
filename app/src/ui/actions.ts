@@ -3,7 +3,7 @@
 // rules live in the sender store. What it adds is the user-facing protection copy from 05-screens.md.
 import { MoveResult } from "../providers/types";
 import { MarkJunkResult, StoredBucket, StoredMessage } from "../senders/store";
-import { adapterMover, toStoredBucket } from "../senders/wiring";
+import { routedMover, toStoredBucket } from "../senders/wiring";
 import { AppState } from "./state";
 import { decodeToken, encodeToken } from "./tokens";
 
@@ -68,9 +68,9 @@ export function listView(st: AppState, view: View): Row[] {
 function toRow(st: AppState, m: StoredMessage): Row {
   return {
     ...m,
-    token: encodeToken(m.folder, m.messageId),
+    token: encodeToken(m.accountId, m.folder, m.messageId),
     categoryName: m.categoryId ? st.categories.nameOf(m.categoryId) : null,
-    protectedMail: st.store.isProtected(st.accountId, m.folder, m.messageId),
+    protectedMail: st.store.isProtected(m.accountId, m.folder, m.messageId),
   };
 }
 
@@ -103,12 +103,12 @@ const REASONS: Record<string, string> = {
 export async function preview(st: AppState, token: string): Promise<Preview | null> {
   const t = decodeToken(token);
   if (!t) return null;
-  const m = st.store.getMessage(st.accountId, t.folder, t.id);
+  const m = st.store.getMessage(t.accountId, t.folder, t.id);
   if (!m) return null;
   const row = toRow(st, m);
   let detail;
   try {
-    detail = await st.adapter.fetchHeadersAndSnippet(m.folder, m.messageId);
+    detail = await (await st.adapterFor(m.accountId)).fetchHeadersAndSnippet(m.folder, m.messageId);
   } catch {
     return { row, from: m.senderKey, date: m.date, snippet: m.snippet, whyFiled: why(m.reason) };
   }
@@ -131,15 +131,20 @@ export interface MoveSummary extends Notice {
 /** Perform one provider move and mirror the result into the sender store. */
 async function relocate(st: AppState, m: StoredMessage, dest: "junk" | "needs_review" | "archive" | "auth" | "category", categoryId: string | null, reason: string): Promise<{ ok: boolean; bucket?: StoredBucket }> {
   let r: MoveResult;
-  if (dest === "category") r = await st.adapter.moveToInbox(m.folder, m.messageId);
-  else r = await st.adapter.moveToBucket(m.folder, m.messageId, dest);
+  try {
+    const adapter = await st.adapterFor(m.accountId);
+    if (dest === "category") r = await adapter.moveToInbox(m.folder, m.messageId);
+    else r = await adapter.moveToBucket(m.folder, m.messageId, dest);
+  } catch {
+    return { ok: false }; // could not reach the account; nothing was changed
+  }
   if (!r.success) return { ok: false };
   // junk may have been redirected (adapter guard / fallback): trust what the adapter actually did
   let bucket: StoredBucket;
   if (dest === "category") bucket = "category";
   else if (!r.moved && r.bucketUsed === null) return { ok: false }; // no usable folder: left in place
   else bucket = toStoredBucket(r.bucketUsed) ?? "needs_review";
-  st.store.updateLocation(st.accountId, m.folder, m.messageId, {
+  st.store.updateLocation(m.accountId, m.folder, m.messageId, {
     bucket,
     categoryId: bucket === "category" ? categoryId : null,
     newMessageId: r.moved ? r.newMessageId : undefined,
@@ -162,7 +167,7 @@ export async function moveMessages(st: AppState, tokens: string[], target: MoveT
 
   for (const token of tokens) {
     const t = decodeToken(token);
-    const m = t ? st.store.getMessage(st.accountId, t.folder, t.id) : null;
+    const m = t ? st.store.getMessage(t.accountId, t.folder, t.id) : null;
     if (!m) { failed++; continue; }
 
     if (target !== "archive" && m.bucket === "auth") {
@@ -170,7 +175,7 @@ export async function moveMessages(st: AppState, tokens: string[], target: MoveT
       authBlocked++;
       continue;
     }
-    if (target === "junk" && st.store.isProtected(st.accountId, m.folder, m.messageId)) {
+    if (target === "junk" && st.store.isProtected(m.accountId, m.folder, m.messageId)) {
       blocked.push({ token, reason: SECURITY_SHAPE_COPY });
       continue;
     }
@@ -210,7 +215,7 @@ export type JunkAction = "not_junk" | "keep" | "archive";
 /** Junk queue: only Not junk, Keep in Junk and Archive exist. There is no delete. */
 export async function junkQueueAction(st: AppState, token: string, action: JunkAction, opts: { allowSender?: boolean } = {}): Promise<Notice> {
   const t = decodeToken(token);
-  const m = t ? st.store.getMessage(st.accountId, t.folder, t.id) : null;
+  const m = t ? st.store.getMessage(t.accountId, t.folder, t.id) : null;
   if (!m) return { kind: "error", text: "That message is no longer here." };
   if (m.bucket !== "junk") return { kind: "error", text: "That message is not in Junk." };
   if (action === "keep") return { kind: "info", text: "Kept in Junk." };
@@ -233,7 +238,7 @@ export async function junkQueueAction(st: AppState, token: string, action: JunkA
 /** Needs review: one click files a message into a category or Auth. */
 export async function fileFromReview(st: AppState, token: string, target: { category: string } | "auth"): Promise<Notice> {
   const t = decodeToken(token);
-  const m = t ? st.store.getMessage(st.accountId, t.folder, t.id) : null;
+  const m = t ? st.store.getMessage(t.accountId, t.folder, t.id) : null;
   if (!m) return { kind: "error", text: "That message is no longer here." };
   if (m.bucket !== "needs_review") return { kind: "error", text: "That message is not in Needs review." };
   if (target === "auth") {
@@ -272,7 +277,7 @@ export function describeMarkJunk(key: string, r: MarkJunkResult): string {
 }
 export async function senderMarkJunk(st: AppState, key: string): Promise<Notice> {
   try {
-    const r = await st.store.markJunk(key, adapterMover(st.adapter));
+    const r = await st.store.markJunk(key, routedMover((id) => st.adapterFor(id)));
     return { kind: r.failed ? "info" : "ok", text: describeMarkJunk(key, r) };
   } catch {
     return { kind: "error", text: "Unknown sender." };
@@ -300,13 +305,4 @@ export async function deleteCategory(st: AppState, id: string): Promise<Notice> 
   if (moved < rows.length) return { kind: "error", text: "Some messages could not be moved to Needs review, so the category was kept." };
   st.categories.remove(id);
   return { kind: "ok", text: `Deleted "${cat.name}". ${moved} message${moved === 1 ? "" : "s"} moved to Needs review; none were deleted.` };
-}
-
-// ------------------------------------------------------------------ accounts (stub)
-export const ACCOUNT_PROVIDERS = ["icloud", "imap", "gmail", "outlook"] as const;
-export type AccountProvider = (typeof ACCOUNT_PROVIDERS)[number];
-/** Stub: nothing is read, stored or sent. */
-export function addAccountStub(provider: string): Notice {
-  if (provider === "gmail" || provider === "outlook") return { kind: "info", text: `${provider === "gmail" ? "Gmail" : "Outlook"} is coming soon.` };
-  return { kind: "info", text: "Account storage is not built yet, so nothing was saved. The demo mailbox is still loaded." };
 }

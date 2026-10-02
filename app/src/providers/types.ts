@@ -85,7 +85,8 @@ export interface Watcher {
 
 export interface MailAdapter {
   connect(): Promise<void>;
-  listMessages(folder: string, opts?: { cursor?: string }): Promise<ListResult>;
+  /** initialLimit: with no cursor, only the newest N messages are listed (first sync). */
+  listMessages(folder: string, opts?: { cursor?: string; initialLimit?: number }): Promise<ListResult>;
   fetchHeadersAndSnippet(folder: string, messageId: string): Promise<MessageDetail>;
   ensureBucket(bucket: BucketName): Promise<BucketInfo>;
   /** Moves (never deletes). Falls back per 06: junk -> needs_review -> leave in place. */

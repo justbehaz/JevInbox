@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { CATEGORY_CAP, CategoryManager } from "../src/categories/manager";
 import {
-  AUTH_IMMUTABLE_COPY, SECURITY_SHAPE_COPY, JUNK_BANNER, addAccountStub, addCategory, deleteCategory, fileFromReview,
+  AUTH_IMMUTABLE_COPY, SECURITY_SHAPE_COPY, JUNK_BANNER, addCategory, deleteCategory, fileFromReview,
   junkQueueAction, listView, moveMessages, navData, preview, senderAllow, senderMarkJunk, senderMute, setCategoryEnabled, Row,
 } from "../src/ui/actions";
-import { AppState, createDemoState } from "../src/ui/state";
+import { DemoAppState as AppState, createDemoState } from "../src/ui/demo";
 import { decodeToken, encodeToken } from "../src/ui/tokens";
 
 const subjects = (rows: Row[]) => rows.map((r) => r.subject).sort();
@@ -49,9 +49,9 @@ describe("demo mailbox", () => {
     expect(await preview(st, "garbage")).toBeNull();
   });
   it("tokens round-trip and reject junk input", () => {
-    expect(decodeToken(encodeToken("Jev Auth", "1000:7"))).toEqual({ folder: "Jev Auth", id: "1000:7" });
+    expect(decodeToken(encodeToken("acct", "Jev Auth", "1000:7"))).toEqual({ accountId: "acct", folder: "Jev Auth", id: "1000:7" });
     expect(decodeToken("!!!")).toBeNull();
-    expect(decodeToken(Buffer.from("[1,2]").toString("base64url"))).toBeNull();
+    expect(decodeToken(Buffer.from("[1,2,3]").toString("base64url"))).toBeNull();
   });
 });
 
@@ -300,15 +300,6 @@ describe("category manager cap", () => {
     setCategoryEnabled(st, "cat_020", false);
     expect(st.categories.enabled().some((c) => c.id === "cat_020")).toBe(false);
     expect(st.categories.enabled().length).toBe(35);
-  });
-});
-
-describe("accounts stub", () => {
-  it("saves nothing and says so; Gmail and Outlook are coming soon", () => {
-    expect(addAccountStub("gmail").text).toBe("Gmail is coming soon.");
-    expect(addAccountStub("outlook").text).toBe("Outlook is coming soon.");
-    expect(addAccountStub("icloud").text).toMatch(/nothing was saved/);
-    expect(addAccountStub("imap").text).toMatch(/nothing was saved/);
   });
 });
 

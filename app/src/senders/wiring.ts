@@ -10,6 +10,14 @@ export function adapterMover(adapter: MailAdapter): JunkMover {
   };
 }
 
+/** Like adapterMover, but picks the right account's adapter for each message. */
+export function routedMover(adapterFor: (accountId: string) => Promise<MailAdapter>): JunkMover {
+  return async ({ messageId, accountId, folder }) => {
+    const r = await (await adapterFor(accountId)).moveToBucket(folder, messageId, "junk");
+    return { success: r.success && r.moved, bucketUsed: r.bucketUsed, newMessageId: r.newMessageId, folder: r.destination };
+  };
+}
+
 export function toStoredBucket(b: string | null | undefined): StoredBucket | null {
   switch (b) {
     case "auth": case "junk": case "needs_review": case "inbox": return b;
@@ -21,6 +29,7 @@ export function toStoredBucket(b: string | null | undefined): StoredBucket | nul
 /** Pipeline hook: store each classified message in the local sender view, at its FINAL location. */
 export function recordOutcome(store: SenderStore, detail: MessageDetail, outcome: MessageOutcome, accountId = "default"): void {
   const moved = outcome.move?.moved ? outcome.move : null;
+  // Moved: where it really went. Not moved (category, or jev.ai disconnected): its logical bucket.
   const bucket: StoredBucket = toStoredBucket(moved?.bucketUsed) ?? toStoredBucket(outcome.target) ?? "category";
   const input: RecordInput = {
     messageId: moved?.newMessageId ?? detail.id,
@@ -33,7 +42,7 @@ export function recordOutcome(store: SenderStore, detail: MessageDetail, outcome
     unread: detail.unread,
     bucket,
     categoryId: bucket === "category" ? outcome.gate.categoryId : undefined,
-    reason: outcome.override ? "security_override" : outcome.gate.reason,
+    reason: outcome.override === "jev_disconnected" ? "jev_disconnected" : outcome.override ? "security_override" : outcome.gate.reason,
     bodySample: detail.bodySample,
   };
   store.recordMessage(input);

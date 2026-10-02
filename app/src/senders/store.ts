@@ -343,6 +343,19 @@ export class SenderStore {
     if (patch.bucket === "auth") this.db.prepare(`UPDATE senders SET auth_ever = 1 WHERE sender_key = ?`).run(m.k);
   }
 
+  /**
+   * Remove one account's LOCAL metadata (message rows, then senders nobody references any more).
+   * Touches only this app's database. It never talks to a mail server.
+   */
+  deleteAccountData(accountId: string): { messages: number; senders: number } {
+    const tx = this.db.transaction(() => {
+      const messages = this.db.prepare(`DELETE FROM messages WHERE account_id = ?`).run(accountId).changes;
+      const senders = this.db.prepare(`DELETE FROM senders WHERE sender_key NOT IN (SELECT DISTINCT sender_key FROM messages)`).run().changes;
+      return { messages, senders };
+    });
+    return tx();
+  }
+
   // ---------------------------------------------------------------- gate wiring
   /** Gate inputs derived from sender actions. Reply history comes from the caller (Sent folder). */
   userContext(hasRepliedTo: (address: string) => boolean = () => false): UserContext {

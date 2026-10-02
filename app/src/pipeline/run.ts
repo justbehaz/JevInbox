@@ -15,6 +15,15 @@ export interface PipelineOptions {
   gateOptions?: GateOptions;
   /** Called when a message is filed as Auth, so the sender-history guard can learn it. */
   recordAuth?: (address: string) => void;
+  /**
+   * False when jev.ai is not connected (deterministic rules only). Then nothing is ever junked, and
+   * only Auth mail is moved; everything else is recorded where it logically belongs but left in place.
+   */
+  jevConnected?: boolean;
+  /** First sync of a mailbox looks at the newest N messages only. */
+  initialLimit?: number;
+  /** At most this many messages per run (the cursor stops after the last one handled). */
+  maxBatch?: number;
   /** Called after each message is handled (e.g. to store it in the local sender view). */
   onClassified?: (detail: MessageDetail, outcome: MessageOutcome) => void;
 }
@@ -27,6 +36,8 @@ export interface MessageOutcome {
   move: MoveResult | null;
   /** Set if the pipeline overrode the gate (should never happen for Auth). */
   override?: string;
+  /** Set when the move was deliberately skipped (jev.ai not connected): the mail stays in place. */
+  moveSkipped?: "jev_disconnected";
   error?: string;
 }
 
@@ -47,7 +58,9 @@ function targetFor(bucket: Bucket): BucketName | null {
 }
 
 export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
-  const list = await o.adapter.listMessages(o.folder, { cursor: o.cursor });
+  const full = await o.adapter.listMessages(o.folder, { cursor: o.cursor, initialLimit: o.initialLimit });
+  const truncated = o.maxBatch !== undefined && full.messages.length > o.maxBatch;
+  const list = truncated ? { ...full, messages: full.messages.slice(0, o.maxBatch) } : full;
   const outcomes: MessageOutcome[] = [];
   let safeCursor = o.cursor ?? list.cursor.split(":")[0] + ":0";
   let failed = false;
@@ -79,9 +92,16 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
       }
       if (gate.bucket === "auth") o.recordAuth?.(addressOf(detail.from));
 
+      // jev.ai not connected: never junk, and only move Auth mail.
+      let moveSkipped: MessageOutcome["moveSkipped"];
+      if (o.jevConnected === false) {
+        if (target === "junk") { target = "needs_review"; override = "jev_disconnected"; }
+        if (target !== "auth") moveSkipped = "jev_disconnected";
+      }
+
       let move: MoveResult | null = null;
-      if (target) move = await o.adapter.moveToBucket(o.folder, summary.id, target);
-      outcome = { messageId: summary.id, gate, target, move, override };
+      if (target && !moveSkipped) move = await o.adapter.moveToBucket(o.folder, summary.id, target);
+      outcome = { messageId: summary.id, gate, target, move, override, moveSkipped };
       if (move && !move.success) outcome.error = move.error ?? "move failed";
     } catch (e) {
       outcome = {
@@ -100,5 +120,5 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
     if (!failed) safeCursor = `${list.cursor.split(":")[0]}:${summary.id.split(":")[1]}`;
   }
 
-  return { outcomes, cursor: failed ? safeCursor : list.cursor, resync: list.resync };
+  return { outcomes, cursor: failed || truncated ? safeCursor : list.cursor, resync: list.resync };
 }
