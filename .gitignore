@@ -18,3 +18,8 @@ coverage/
 .DS_Store
 .vscode/
 .idea/
+
+# Local databases hold mail metadata
+*.sqlite
+*.sqlite-journal
+*.db

@@ -131,6 +131,8 @@ CREATE TABLE sender_index (
 );
 ```
 
+> **Implementation note (build step 3).** The code in `app/src/senders/store.ts` does not keep denormalised counters. It stores two tables, `senders` (flags: allowlisted, marked_junk, muted, auth_ever) and `messages` (bucket, category, security flags, no body text), and derives counts, last-seen and breakdowns with `GROUP BY` so they cannot drift. Allow and mark-junk are mutually exclusive. There is no `deleted_at` column because the app never deletes mail. The pseudo-SQL below is kept as the original design sketch; it is not valid SQLite.
+
 ### Alternative: Category Counts as JSON
 
 To avoid schema changes when user categories change, store per-category counts as JSON:
@@ -281,7 +283,7 @@ Example:
 - Message from `promo@retailer.com` is classified into "Promotions" category.
 - It appears in the "Promotions" view.
 - It also appears in the "All from promo@retailer.com" sender view, labelled "Promotions".
-- User can interact with it from either view (read, star, delete, move).
+- User can interact with it from either view (read, star, archive, move; the app never deletes mail).
 - Changing its category from "Promotions" to "Junk" updates both views immediately.
 
 ---

@@ -4,7 +4,7 @@ import { addressOf } from "../gate/detect";
 import { canMoveToJunk, GateOptions, classify } from "../gate/gate";
 import { Bucket, GateResult, Message, UserContext } from "../gate/types";
 import { JevClient } from "../jev/types";
-import { BucketName, MailAdapter, MoveResult } from "../providers/types";
+import { BucketName, MailAdapter, MessageDetail, MoveResult } from "../providers/types";
 
 export interface PipelineOptions {
   adapter: MailAdapter;
@@ -15,6 +15,8 @@ export interface PipelineOptions {
   gateOptions?: GateOptions;
   /** Called when a message is filed as Auth, so the sender-history guard can learn it. */
   recordAuth?: (address: string) => void;
+  /** Called after each message is handled (e.g. to store it in the local sender view). */
+  onClassified?: (detail: MessageDetail, outcome: MessageOutcome) => void;
 }
 
 export interface MessageOutcome {
@@ -52,6 +54,7 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
 
   for (const summary of list.messages) {
     let outcome: MessageOutcome;
+    let fetched: MessageDetail | undefined;
     try {
       const detail = await o.adapter.fetchHeadersAndSnippet(o.folder, summary.id);
       const message: Message = {
@@ -61,6 +64,7 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
         subject: detail.subject,
         body: detail.bodySample, // original text, local only; the gate redacts before jev.ai
       };
+      fetched = detail;
       const gate = await classify(message, o.user, o.jev, o.gateOptions);
       let target = targetFor(gate.bucket);
       let override: string | undefined;
@@ -87,6 +91,9 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
         move: null,
         error: e instanceof Error ? e.message : "pipeline error",
       };
+    }
+    if (fetched) {
+      try { o.onClassified?.(fetched, outcome); } catch { /* the sender view must never break filing */ }
     }
     outcomes.push(outcome);
     if (outcome.error) failed = true;
