@@ -97,7 +97,7 @@ The `questions` array contains one object per enabled category, plus two system 
 - **Subject:** sent as written, except the code and token redaction below is applied to it too.
 - **Snippet:** truncated to 500 characters of visible text, AFTER redaction.
 - **Authentication-Results:** SPF/DKIM/DMARC verdicts only.
-- **Mandatory local redaction before sending (v1 rule, applies to Subject and Snippet):** replace every standalone 4-8 digit code (with or without spaces or hyphens inside, e.g. 123456, 123 456, 12-34-56) with `[CODE]`; replace any URL or URL-like string that looks like a reset, verify, magic-link or sign-in link, and any long opaque token (roughly 16 or more URL-safe characters, or a token/code/key/sig query parameter), with `[LINK]`. One-time codes must never leave the device. Redaction runs on device before the request is built. The local deterministic Auth pass and the security-shape backstop always run on the ORIGINAL unredacted text, on device only. If redaction fails or throws, do not send: route to Needs review.
+- **Mandatory local redaction before sending (v1 rule, applies to Subject and Snippet):** replace every standalone 4-10 digit code (with or without spaces or hyphens inside, e.g. 123456, 123 456, 12-34-56; 4-10 matches the range used by the deterministic Auth pass and the security-shape backstop) with `[CODE]`; replace any URL or URL-like string that looks like a reset, verify, magic-link or sign-in link, and any long opaque token (roughly 16 or more URL-safe characters, or a token/code/key/sig query parameter), with `[LINK]`. One-time codes must never leave the device. Redaction runs on device before the request is built. The local deterministic Auth pass and the security-shape backstop always run on the ORIGINAL unredacted text, on device only. If redaction fails or throws, do not send: route to Needs review.
 - **Never send:**
   - Raw message body (full text) or attachments
   - Passwords or secrets in headers
@@ -294,17 +294,20 @@ Only proceed if no Auth signal was detected (deterministic, security-shape backs
 
 1. **No Auth signal** (already checked in Step 1), AND
 2. **jev.ai sys_junk = Yes, confidence >=90** and **sys_auth = No, confidence >=90**, AND
-3. **No receipt or bill pattern** (deterministic regex), AND
-4. **Not from a sender the user has replied to** (checked in sent history), AND
-5. **Not allowlisted by the user**
+3. **No security-shape backstop hit** (02-never-junk.md, "Auth Backstop"), AND
+4. **No receipt or bill pattern** (deterministic regex), AND
+5. **Not from a sender the user has replied to** (checked in sent history), AND
+6. **No sender Auth history** (the exact address or its root domain, including subdomains, has never produced an Auth-filed message; history is kept indefinitely), AND
+7. **Not allowlisted by the user**
 
 **If all true → Junk.**
 
-**If any condition fails → Proceed to Step 3 (category filing or Needs review).**
+**If jev.ai said sys_junk = Yes but any condition fails → Needs review (never Junk).** If jev.ai said sys_junk = No (confidence >=60), proceed to Step 3 (category filing).
 
 **Special case: User marked sender junk (denylist):**
 - If no Auth signal and no other exceptions, user's explicit mark sends mail to Junk (review queue, not silent delete).
-- This overrides the 90 confidence thresholds and the receipt/reply exceptions (explicit user intent), but never overrides Auth, the security-shape backstop (those go to Needs review), or allowlist.
+- User-initiated Junk is not subject to the 90 thresholds, the sender-history guard or the receipt/reply exceptions (explicit user intent), but it never overrides Auth, the security-shape backstop (those go to Needs review), or allowlist.
+- Retroactive sender-junk moves must finish before per-sender cache re-evaluation begins.
 
 ### Step 3: Multi-Yes Category Resolution
 
@@ -825,7 +828,7 @@ The original question overlaps with the Auth system bucket. Reworording explicit
 - [ ] Implement timeout logic: 3 second max, 2 retries, then Needs review.
 - [ ] Apply Auth thresholds: yes >=80 routes to Auth, yes 60-79 routes to Needs review; Auth no must be >=90 for Junk to be considered.
 - [ ] Apply Junk threshold: >=90 (with Auth no >=90 and all backstops) routes to Junk; anything lower routes to Needs review.
-- [ ] Implement on-device redaction of 4-8 digit codes and reset/verify link tokens before building the request; abort to Needs review if redaction fails.
+- [ ] Implement on-device redaction of 4-10 digit codes and reset/verify link tokens before building the request; abort to Needs review if redaction fails.
 - [ ] Timeout 3 s and 2 retries are placeholders; any timeout or error routes to Needs review, never Junk.
 - [ ] Implement receipt/bill pattern exception (deterministic).
 - [ ] Implement reply-history exception (sender in Sent folder).
@@ -843,12 +846,3 @@ The original question overlaps with the Auth system bucket. Reworording explicit
 ## Conclusion
 
 Jev Inbox classifies each message with a single, deterministic jev.ai call. The request carries only four fields (From, Subject, a 500-character snippet, Auth-Results), with codes and reset or verify link tokens redacted on device, and the response delivers yes/no answers with confidence scores. Local safety gates (Auth detection, allowlist, never-junk thresholds) run before and after the jev.ai call to ensure security mail never lands in Junk and provider errors route safely to Needs review. Caching by message ID saves API calls. The reworded cat_029 question avoids overlap with Auth. Multi-yes resolution ranks by confidence and breaks ties by catalogue order. This contract ensures one call per email, cheap scaling, and privacy-preserving classification.
-
-
-## Lead amendment: Auth backstop (overrides any conflicting threshold above)
-
-For jev.ai-initiated Junk the thresholds are Auth "no" >= 90 and Junk "yes" >= 90, and the security-shape backstop plus sender-history guard in 02-never-junk.md section "Auth Backstop for jev.ai-initiated Junk" apply. Where earlier sections say Junk >= 75 or Auth "no" >= 80 proceeds to the junk gate, this amendment governs: anything below the raised thresholds, or any backstop hit, routes to Needs review. Auth "yes" thresholds are unchanged (>= 80 Auth; 60-79 Needs review).
-
-User-initiated Junk (explicit mark-sender-junk) is not subject to the 90 thresholds, but it never applies to Auth mail or to messages hitting the security-shape backstop (those go to Needs review). Sender-history guard scope: exact address or root domain (registrable domain including its subdomains), kept indefinitely. Retroactive sender-junk moves must finish before per-sender cache re-evaluation begins.
-
-Code note (build step 1): the implementation redacts standalone 4-10 digit codes (spec said 4-8) so it matches the 4-10 range used by the deterministic Auth pass and the security-shape backstop; a 9-10 digit code is never sent.

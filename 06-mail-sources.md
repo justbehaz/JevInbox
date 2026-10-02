@@ -44,7 +44,7 @@ interface MailAdapter {
   
   // Move a message to a bucket (our Junk, Needs review, or a category folder/label).
   // Implementation: For Gmail, add label and remove INBOX. For Outlook, use move endpoint.
-  // For IMAP, move message to folder (COPY, then mark as deleted on source, then EXPUNGE only on destination folder).
+  // For IMAP, use the MOVE extension when advertised; otherwise COPY and flag the original with the harmless keyword $JevMoved. Never mark \\Deleted, never EXPUNGE.
   // Returns the operation result (message ID in new location, original location recorded).
   moveToBucket(
     folder: string,
@@ -374,9 +374,9 @@ IMAP folders are flat or hierarchical (via IMAP folder naming with `/` or `.` se
 
 **Moving (Implementation):**
 - IMAP COPY command: `COPY message-id destination-folder`.
-- Mark source message as `\Deleted`.
-- EXPUNGE on source folder only (or let user configure: auto-delete or soft-delete).
-- Reverse move: COPY back to original folder, unmark `\Deleted`.
+- No MOVE extension: after COPY, flag the original with the keyword `$JevMoved` (never `\Deleted`). The original stays in place; nothing is deleted or expunged.
+- With the MOVE extension (RFC 6851) use `UID MOVE`; the server relocates the message itself.
+- Reverse move: `UID MOVE` back using the destination UID (needs UIDPLUS), or clear `$JevMoved` if COPY was used.
 
 **Safety Rule (Never-Junk Gate):**
 - iCloud's `[Gmail]` folder (if present) may have a Junk subfolder. Do NOT automatically move mail to it.
@@ -482,9 +482,9 @@ Password: [IMAP password or app-specific password]
 
 **Moving (Implementation):**
 - `COPY message-ids destination-folder`.
-- Mark source as `\Deleted`.
-- `EXPUNGE` on source folder to delete the message copy (or soft-delete if user prefers).
-- Reverse move: COPY back from destination, unmark `\Deleted`.
+- No MOVE extension: COPY, then flag the original with `$JevMoved` (never `\Deleted`, never `EXPUNGE`).
+- With MOVE: `UID MOVE`.
+- Reverse move: `UID MOVE` back using the destination UID, or clear `$JevMoved`.
 
 **Safety Rule (Never-Junk Gate):**
 - Do not automatically move mail to the provider's `\Junk` folder.
@@ -690,7 +690,7 @@ If the Jev Junk bucket cannot be created (permissions, name clash, folder limits
 | **Authentication** | OAuth 2.0 | OAuth 2.0 | App password (no OAuth) | Password or XOAUTH2 |
 | **Scope/Permission** | gmail.modify | Mail.ReadWrite, offline_access | Requires 2FA on Apple Account | User-provided |
 | **Labels/Folders** | Labels (no folders) | Folders (hierarchy) | IMAP folders | IMAP folders |
-| **Move Mechanism** | Add label, remove INBOX | Folder move endpoint | IMAP COPY + EXPUNGE | IMAP COPY + EXPUNGE |
+| **Move Mechanism** | Add label, remove INBOX | Folder move endpoint | IMAP MOVE, else COPY + `$JevMoved` flag (no expunge) | IMAP MOVE, else COPY + `$JevMoved` flag (no expunge) |
 | **Push Notifications** | Pub/Sub watch (7-day renew) | Webhooks (70-hour renew) | Not supported | Not supported |
 | **Sync Method (Primary)** | History IDs + Pub/Sub | Delta queries + webhooks | IDLE or UID polling | IDLE or UID polling |
 | **Sync Method (Fallback)** | Polling history IDs | Polling delta queries | UID polling | UID polling |

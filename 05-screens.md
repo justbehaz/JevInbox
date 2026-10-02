@@ -74,11 +74,11 @@ Left sidebar on desktop (width: 260–280 px), collapsible on tablet/mobile.
 
 ### Layout
 
-After selecting a section (e.g., "Inbox" or "Personal"), display a list of senders grouped by most recent message date.
+After selecting a section (e.g., "Inbox" or "Personal & Family"), display a list of senders grouped by most recent message date.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ Personal > Inbox                                     │
+│ Personal & Family > Inbox                            │
 ├──────────────────────────────────────────────────────┤
 │ [Search senders] [Sort ▼] [Filter ▼] [Select all ☐] │
 ├──────────────────────────────────────────────────────┤
@@ -106,7 +106,7 @@ After selecting a section (e.g., "Inbox" or "Personal"), display a list of sende
 
 ### Components
 
-- **Header:** Breadcrumb (e.g., "Personal > Inbox") or section name.
+- **Header:** Breadcrumb (e.g., "Personal & Family > Inbox") or section name.
 - **Controls:**
   - Search box (search by sender name or address).
   - Sort dropdown (Latest, Oldest, Sender A–Z, Unread count).
@@ -154,7 +154,7 @@ Opened when user clicks on a sender card from the inbox summary. Displays every 
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│ < Back to Personal                                   │
+│ < Back to Personal & Family                          │
 ├──────────────────────────────────────────────────────┤
 │ Apple Support                                        │
 │ apple-support@apple.com                              │
@@ -955,7 +955,7 @@ Opened when user clicks "Manage categories" or "Categories ⚙" in the sidebar.
 
 - **Disabled categories count toward 48:** This is explicit in the UI and help text.
 - **No silent deletion:** Deleting a category always moves its messages (not silent delete).
-- **Cannot rename defaults:** Defaults (Personal, Work, Finance, etc.) can only be disabled, not renamed. Custom categories can be renamed.
+- **Cannot rename defaults:** Defaults (Personal & Family, Work, Finance, etc.) can only be disabled, not renamed. Custom categories can be renamed.
 
 ### Accessibility
 
