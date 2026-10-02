@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { syncNowAction } from "../app/actions";
 import { getAppState } from "../src/ui/state";
+import { JEV_BANNER, JEV_BANNER_DETAIL } from "../src/ui/accountActions";
 import { navData } from "../src/ui/actions";
 import NavLink from "./NavLink";
 import ThemeToggle from "./ThemeToggle";
@@ -13,17 +15,23 @@ function Count({ n, unread, label }: { n: number; unread: number; label: string 
 }
 
 export default async function Shell({ children }: { children: React.ReactNode }) {
-  const nav = navData(await getAppState());
+  const state = await getAppState();
+  const nav = navData(state);
+  const live = state.mode === "live";
   return (
     <div className="flex min-h-screen flex-col">
       <header className="flex items-center justify-between gap-4 border-b border-line bg-card px-4 py-2">
         <Link href="/" className="text-lg font-bold">Jev Inbox</Link>
-        <p className="hidden text-xs text-muted sm:block">Demo mailbox. No account is connected and nothing is saved.</p>
+        <p className="hidden text-xs text-muted sm:block">{live ? "Connected to your saved account(s)." : "Demo mailbox. No account is connected and nothing is saved."}</p>
         <div className="flex items-center gap-2">
+          {live ? <form action={syncNowAction}><input type="hidden" name="returnTo" value="/" /><button type="submit" className="rounded border border-line px-3 py-1 text-sm hover:bg-sel">Sync now</button></form> : null}
           <ThemeToggle />
           <Link href="/settings" className="rounded border border-line px-3 py-1 text-sm hover:bg-sel">Settings</Link>
         </div>
       </header>
+      {live ? (
+        <div role="status" className="border-b border-warn bg-card px-4 py-2 text-sm"><strong>{JEV_BANNER}.</strong> {JEV_BANNER_DETAIL}</div>
+      ) : null}
       <div className="flex flex-1 flex-col md:flex-row">
         <nav aria-label="Mailboxes" className="w-full shrink-0 border-b border-line bg-card p-3 md:w-64 md:border-b-0 md:border-r">
           <ul className="space-y-0.5">

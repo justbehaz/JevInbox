@@ -4,6 +4,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import * as ui from "../src/ui/actions";
+import { getRuntime } from "../src/runtime/runtime";
+import * as acct from "../src/ui/accountActions";
 import { getAppState } from "../src/ui/state";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "");
@@ -81,7 +83,35 @@ export async function categoryAction(f: FormData): Promise<void> {
   }
 }
 
-/** Stub: reads nothing from the form (no password is touched) and saves nothing. */
-export async function addAccountAction(f: FormData): Promise<void> {
-  back(f, ui.addAccountStub(str(f, "provider")), "/settings");
+/** Step 1: read-only connection test. The password is held in server memory until confirmed. */
+export async function testAccountAction(f: FormData): Promise<void> {
+  const rt = await getRuntime();
+  const provider = str(f, "provider") === "imap" ? "imap" : "icloud";
+  const r = await acct.testAccount(rt, {
+    provider, email: str(f, "email"), password: str(f, "password"),
+    host: str(f, "host"), port: str(f, "port"), tls: str(f, "tls"),
+  });
+  if (r.kind !== "ok" || !r.token) back(f, r, "/settings");
+  const g = new FormData(); g.set("returnTo", `/settings?pending=${r.token}`);
+  back(g, r, "/settings");
+}
+
+/** Step 2: the user confirmed. Creates the Jev folders, then saves the account. */
+export async function confirmAccountAction(f: FormData): Promise<void> {
+  const rt = await getRuntime();
+  const n = await acct.confirmAccount(rt, str(f, "token"));
+  const g = new FormData(); g.set("returnTo", n.kind === "ok" ? "/" : "/settings");
+  back(g, n, "/settings");
+}
+
+export async function cancelAccountAction(f: FormData): Promise<void> {
+  back(f, acct.cancelAccount(await getRuntime(), str(f, "token")), "/settings");
+}
+
+export async function removeAccountAction(f: FormData): Promise<void> {
+  back(f, await acct.removeAccount(await getRuntime(), str(f, "accountId")), "/settings");
+}
+
+export async function syncNowAction(f: FormData): Promise<void> {
+  back(f, await acct.syncNow(await getRuntime()), "/");
 }
