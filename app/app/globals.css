@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+/* Dark mode is driven by [data-theme="dark"] on <html> (set from the OS preference or the toggle). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme {
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-danger: var(--danger);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-sel: var(--sel);
+}
+
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --fg: #14181f; --muted: #566070; --line: #d5dae2;
+  --accent: #1d4ed8; --accent-fg: #ffffff; --danger: #b91c1c; --ok: #15803d; --warn: #b45309; --sel: #e3ecff;
+  --focus: #1d4ed8;
+}
+[data-theme="dark"] {
+  --bg: #0f1218; --card: #171b23; --fg: #e8ecf3; --muted: #9aa5b6; --line: #2b3240;
+  --accent: #7aa2ff; --accent-fg: #0b1020; --danger: #ff8a8a; --ok: #6ee7a0; --warn: #fbbf6a; --sel: #1f2a44;
+  --focus: #9db8ff;
+}
+
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+body { background: var(--bg); color: var(--fg); font-family: ui-sans-serif, system-ui, sans-serif; }
+
+/* Visible keyboard focus everywhere */
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

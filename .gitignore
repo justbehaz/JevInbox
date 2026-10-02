@@ -23,3 +23,10 @@ coverage/
 *.sqlite
 *.sqlite-journal
 *.db
+
+# Next.js generated
+next-env.d.ts
+
+# Generated agent instruction files are not part of this project
+AGENTS.md
+CLAUDE.md
