@@ -18,6 +18,7 @@ export interface SyncSummary {
   auth: number;
   needsReview: number;
   leftInPlace: number;
+  preview?: boolean;
   error?: string;
 }
 
@@ -55,6 +56,7 @@ export class SyncService {
     const acct = this.d.accounts.get(accountId);
     const summary: SyncSummary = { accountId, processed: 0, auth: 0, needsReview: 0, leftInPlace: 0 };
     if (!acct) return { ...summary, error: "Unknown account." };
+    summary.preview = acct.preview;
     try {
       const adapter = await this.d.adapterFor(accountId);
       const res = await runPipeline({
@@ -62,6 +64,9 @@ export class SyncService {
         folder: this.d.folder ?? "INBOX",
         jev: this.d.jev ?? new DisconnectedJev(),
         jevConnected: this.d.jevConnected ?? false,
+        // Preview mode: classify and record in the app only; the adapter is read-only too.
+        // Re-read per message, and fail closed (preview) if the account disappears.
+        dryRun: () => this.d.accounts.get(accountId)?.preview ?? true,
         user: this.d.store.userContext(),
         cursor: acct.cursor ?? undefined,
         initialLimit: this.d.initialLimit ?? 200,
@@ -78,7 +83,7 @@ export class SyncService {
         if (o.error) summary.error = o.error;
       }
       this.d.accounts.setCursor(accountId, res.cursor);
-      const note = `${summary.processed} new: ${summary.auth} Auth, ${summary.needsReview} Needs review, ${summary.leftInPlace} left in place`;
+      const note = `${summary.processed} new: ${summary.auth} Auth, ${summary.needsReview} Needs review, ${summary.leftInPlace} left in place${acct.preview ? " (Preview: nothing moved)" : ""}`;
       this.d.accounts.recordSync(accountId, summary.error ? "error" : "ok", summary.error ? `${note}; ${scrub(summary.error, []).slice(0, 120)}` : note);
     } catch (e) {
       summary.error = scrub(e instanceof Error ? e.message : "sync failed", []).slice(0, 200);
@@ -94,6 +99,6 @@ export function describeSync(s: SyncSummary[]): string {
   const n = s.reduce((a, x) => a + x.processed, 0);
   const auth = s.reduce((a, x) => a + x.auth, 0);
   const nr = s.reduce((a, x) => a + x.needsReview, 0);
-  const base = `Synced ${n} new message${n === 1 ? "" : "s"}: ${auth} Auth, ${nr} in Needs review.`;
+  const base = `Synced ${n} new message${n === 1 ? "" : "s"}: ${auth} Auth, ${nr} in Needs review.${s.some((x) => x.preview) ? " Preview mode: nothing was moved on your mailbox." : ""}`;
   return errs.length ? `${base} ${errs.length} account${errs.length === 1 ? "" : "s"} had a problem: ${errs[0].error}` : base;
 }

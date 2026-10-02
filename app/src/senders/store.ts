@@ -418,6 +418,7 @@ export class SenderStore {
       if (r.bucket === "auth" || r.detAuth || r.wasAuth) { result.skippedAuth++; continue; }
       if (r.secShape) { result.skippedSecurityShape++; continue; }
       if (r.bucket === "junk") { result.alreadyJunk++; continue; }
+      if (r.bucket === "archived") continue; // the user archived it on purpose; leave it alone
       let res;
       try { res = await mover({ messageId: r.messageId, accountId: r.accountId, folder: r.folder }); } catch { res = { success: false }; }
       if (!res.success) { result.failed++; continue; }

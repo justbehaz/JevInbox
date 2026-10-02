@@ -16,6 +16,8 @@ export interface AppState {
   jevConnected: boolean;
   /** A connected adapter for one account (cached). */
   adapterFor(accountId: string): Promise<ImapAdapter>;
+  /** Preview mode: filing is recorded in the app only and nothing is written to the server. */
+  isPreview(accountId: string): boolean;
   accountIds(): string[];
 }
 

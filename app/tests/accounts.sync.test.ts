@@ -11,7 +11,9 @@ import { Runtime } from "../src/runtime/runtime";
 import { MemorySecretStore, SecretStore } from "../src/secrets";
 import { openDb } from "../src/storage/db";
 import { DisconnectedJev } from "../src/jev/disconnected";
-import { cancelAccount, confirmAccount, removeAccount, startBackgroundSync, syncNow, testAccount } from "../src/ui/accountActions";
+import { AccountStore } from "../src/accounts/accountStore";
+import { applyFiling, applyPlan, cancelAccount, confirmAccount, describePlan, previewOn, removeAccount, startBackgroundSync, syncNow, testAccount } from "../src/ui/accountActions";
+import { fileFromReview, junkQueueAction, moveMessages, senderMarkJunk } from "../src/ui/actions";
 import { listView } from "../src/ui/actions";
 
 const PASSWORD = "app-specific-pw-0000-not-real";
@@ -55,6 +57,16 @@ const add = async (rt: Runtime) => {
   expect(t.kind).toBe("ok");
   return confirmAccount(rt, t.token!);
 };
+/** Add the account and apply filing (preview off, Jev folders created). */
+const addApplied = async (rt: Runtime) => {
+  const n = await add(rt);
+  expect(n.kind).toBe("ok");
+  const r = await applyFiling(rt, rt.accounts.list()[0].id);
+  expect(r.kind).toBe("ok");
+  return r;
+};
+const WRITE_OPS = ["create", "move", "copy", "keyword+", "keyword-", "idle"];
+const writes = (t: FakeImapTransport, from = 0) => t.ops.slice(from).filter((o) => WRITE_OPS.includes(o.op));
 
 describe("Add account: read-only test, then confirm", () => {
   it("the test is read-only: it shows folders and capabilities and changes nothing", async () => {
@@ -78,18 +90,20 @@ describe("Add account: read-only test, then confirm", () => {
     expect(rt.isLive).toBe(false);
   });
 
-  it("confirming creates the Jev folders, saves the password only in the secret store, and goes live", async () => {
+  it("confirming saves the account in Preview mode, creates NOTHING on the server, and goes live", async () => {
     const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
     const n = await add(rt);
     expect(n.kind).toBe("ok");
-    expect(n.text).toMatch(/Created folders: Jev Auth, Jev Needs review, Jev Junk/);
-    expect(boxes["user@example.com"].folderPaths()).toEqual(expect.arrayContaining(["Jev Auth", "Jev Junk", "Jev Needs review"]));
-    expect(boxes["user@example.com"].messages("Junk").length).toBe(0); // server Junk untouched
+    expect(n.text).toMatch(/Preview mode/);
+    expect(box.folderPaths().filter((p) => p.startsWith("Jev"))).toEqual([]);
+    expect(writes(box)).toEqual([]);
+    expect(box.messages("Junk").length).toBe(0);
     const store = rt.secrets as MemorySecretStore;
     expect(store.names()).toEqual(["jev-inbox-icloud-user@example.com"]);
     expect(JSON.parse((await store.get("jev-inbox-icloud-user@example.com"))!)).toEqual({ password: PASSWORD });
     const acct = rt.accounts.list()[0];
-    expect(acct).toMatchObject({ provider: "icloud", email: "user@example.com", host: "imap.mail.me.com", port: 993, tls: "implicit" });
+    expect(acct).toMatchObject({ provider: "icloud", email: "user@example.com", host: "imap.mail.me.com", port: 993, tls: "implicit", preview: true });
     expect(JSON.stringify(acct)).not.toContain(PASSWORD);
     expect(rt.isLive).toBe(true);
     expect((await rt.state).mode).toBe("live");
@@ -158,15 +172,6 @@ describe("Add account: read-only test, then confirm", () => {
     expect(seen[0]).toMatchObject({ host: "mail.example.org", port: 143, tls: "starttls" });
   });
 
-  it("if Jev folders cannot be created, the account is still saved and the notice says what happens", async () => {
-    const boxes = { "user@example.com": new FakeImapTransport({ failCreate: (p) => p.startsWith("Jev") }) };
-    const { rt } = setup({ boxes });
-    const n = await add(rt);
-    expect(n.kind).toBe("ok");
-    expect(n.text).toMatch(/could not be created/);
-    expect(rt.accounts.list().length).toBe(1);
-  });
-
   it("if the secret cannot be stored, nothing is saved", async () => {
     const broken: SecretStore = { kind: "memory", get: async () => null, set: async () => { throw new Error("keychain locked"); }, delete: async () => false };
     const { rt } = setup({ secrets: broken });
@@ -230,7 +235,7 @@ describe("Sync with jev.ai not connected (the real sync path)", () => {
     const { rt, boxes } = setup();
     const box = boxes["user@example.com"];
     seed(box);
-    await add(rt);
+    await addApplied(rt);
     const total = box.totalMessages();
     const summaries = await rt.sync.syncAll();
     expect(summaries[0]).toMatchObject({ processed: 4, auth: 1 });
@@ -256,7 +261,7 @@ describe("Sync with jev.ai not connected (the real sync path)", () => {
     const { rt, boxes } = setup();
     const box = boxes["user@example.com"];
     seed(box);
-    await add(rt);
+    await addApplied(rt);
     await rt.sync.syncAll();
     await rt.liveStore.markJunk("deals@shop.example", async () => ({ success: false })); // mark only; nothing moves
     box.deliver("INBOX", { from: "Shop <deals@shop.example>", subject: "Autumn sale", body: "Coats 20% off." });
@@ -324,7 +329,7 @@ describe("Sync with jev.ai not connected (the real sync path)", () => {
     const { rt, boxes } = setup();
     expect((await syncNow(rt)).text).toMatch(/demo mailbox/);
     seed(boxes["user@example.com"]);
-    await add(rt);
+    await addApplied(rt);
     const n = await syncNow(rt);
     expect(n).toMatchObject({ kind: "ok", text: "Synced 4 new messages: 1 Auth, 3 in Needs review." });
   });
@@ -332,15 +337,15 @@ describe("Sync with jev.ai not connected (the real sync path)", () => {
   it("background polling runs sync on a timer and can be started only once", async () => {
     const { rt, boxes } = setup();
     seed(boxes["user@example.com"]);
-    await add(rt);
+    await addApplied(rt);
     const spy = vi.spyOn(rt.sync, "syncAll");
     const g = globalThis as unknown as Record<string, unknown>;
-    delete g.__jevPoll;
+    delete g.__jevPoll_v2;
     startBackgroundSync(rt, 15);
     startBackgroundSync(rt, 15); // second call does nothing
     await new Promise((r) => setTimeout(r, 80));
-    clearInterval(g.__jevPoll as ReturnType<typeof setInterval>);
-    delete g.__jevPoll;
+    clearInterval(g.__jevPoll_v2 as ReturnType<typeof setInterval>);
+    delete g.__jevPoll_v2;
     expect(spy.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(box(boxes).messages("Jev Auth").length).toBe(1);
   });
@@ -371,5 +376,232 @@ describe("pipeline option jevConnected=false", () => {
     const res = await runPipeline({ adapter, folder: "INBOX", jev, jevConnected: false, user: { allowlist: [], markedJunk: [], hasRepliedTo: () => false, hasAuthHistory: () => false } });
     expect(res.outcomes[0].target).not.toBe("junk");
     expect(t.folderPaths().includes("Jev Junk") ? t.messages("Jev Junk").length : 0).toBe(0);
+  });
+});
+
+describe("Preview mode (on by default for new accounts)", () => {
+  it("a preview sync performs ZERO server writes (asserted on the operation log)", async () => {
+    const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
+    seed(box);
+    await add(rt);
+    const start = box.ops.length;
+    const mailBefore = JSON.stringify(box.all());
+    const foldersBefore = box.folderPaths();
+    const [s] = await rt.sync.syncAll();
+    expect(s).toMatchObject({ processed: 4, auth: 1, preview: true });
+    expect(writes(box, start)).toEqual([]); // no create, move, copy, flag or idle
+    expect(box.ops.slice(start).map((o) => o.op).every((o) => ["connect", "close", "fetchSince", "fetchOne", "fetchLatest"].includes(o))).toBe(true);
+    expect(JSON.stringify(box.all())).toBe(mailBefore);
+    expect(box.folderPaths()).toEqual(foldersBefore);
+    // the app still records where each message would go
+    const st = await rt.state;
+    const auth = listView(st, { kind: "auth" });
+    expect(auth.map((r) => r.subject)).toEqual(["Your verification code"]);
+    expect(auth[0].previewNote).toBe("Preview: would move to Jev Auth");
+    expect(listView(st, { kind: "needs_review" }).length).toBe(3);
+    expect(listView(st, { kind: "needs_review" })[0].previewNote).toBe("Preview: stays where it is");
+    expect(listView(st, { kind: "junk" })).toEqual([]);
+    expect(rt.accounts.list()[0].lastSyncNote).toMatch(/Preview: nothing moved/);
+    expect((await syncNow(rt)).text).toMatch(/Preview mode: nothing was moved/);
+  });
+
+  it("Jev folders are created only on Apply", async () => {
+    const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
+    seed(box);
+    await add(rt);
+    await rt.sync.syncAll();
+    expect(box.folderPaths().filter((p) => p.startsWith("Jev"))).toEqual([]);
+    expect(box.ops.filter((o) => o.op === "create")).toEqual([]);
+    const r = await applyFiling(rt, rt.accounts.list()[0].id);
+    expect(r.kind).toBe("ok");
+    expect(box.folderPaths()).toEqual(expect.arrayContaining(["Jev Auth", "Jev Needs review", "Jev Junk"]));
+    expect(box.ops.filter((o) => o.op === "create").map((o) => o.path).sort()).toEqual(["Jev Auth", "Jev Junk", "Jev Needs review"]);
+    expect(box.messages("Junk").length).toBe(0); // server Junk never written
+  });
+
+  it("Apply shows counts first, then moves the recorded Auth mail and turns preview off", async () => {
+    const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
+    seed(box);
+    await add(rt);
+    await rt.sync.syncAll();
+    const id = rt.accounts.list()[0].id;
+    const plan = applyPlan(rt, id)!;
+    expect(plan.authToMove).toBe(1);
+    expect(describePlan(plan)).toBe("1 Auth message will move to Jev Auth. Nothing will be junked or deleted.");
+    const r = await applyFiling(rt, id);
+    expect(r.text).toMatch(/Preview mode is off\. Created folders: .*Moved 1 Auth message to Jev Auth\. Nothing was junked or deleted\./);
+    expect(rt.accounts.get(id)!.preview).toBe(false);
+    expect(box.messages("Jev Auth").map((m) => m.subject)).toEqual(["Your verification code"]);
+    expect(box.messages("INBOX").map((m) => m.subject).sort()).toEqual(["Lunch?", "Note about your profile", "Summer sale"]);
+    expect(box.folderPaths().includes("Jev Junk") ? box.messages("Jev Junk").length : 0).toBe(0);
+    // the app now knows the new location
+    const row = listView(await rt.state, { kind: "auth" })[0];
+    expect(row.folder).toBe("Jev Auth");
+    expect(row.previewNote).toBeNull();
+    expect((await applyFiling(rt, id)).kind).toBe("error"); // already off
+  });
+
+  it("after Apply, the next sync moves Auth into Jev Auth and still junks nothing while jev.ai is disconnected", async () => {
+    const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
+    seed(box);
+    await add(rt);
+    await rt.sync.syncAll();
+    await applyFiling(rt, rt.accounts.list()[0].id);
+    // a sender the user marked junk sends both kinds of mail
+    await rt.liveStore.markJunk("deals@shop.example", async () => ({ success: false }));
+    const start = box.ops.length;
+    box.deliver("INBOX", { from: "Shop <deals@shop.example>", subject: "Your one-time password", body: "Use 551029 to sign in." });
+    box.deliver("INBOX", { from: "Shop <deals@shop.example>", subject: "Autumn sale", body: "Coats 20% off." });
+    box.deliver("INBOX", { from: "Friend <friend@mail.example>", subject: "Dinner?", body: "Free on Friday?" });
+    const [s] = await rt.sync.syncAll();
+    expect(s).toMatchObject({ processed: 3, auth: 1, preview: false });
+    expect(box.messages("Jev Auth").map((m) => m.subject).sort()).toEqual(["Your one-time password", "Your verification code"]);
+    expect(box.messages("INBOX").map((m) => m.subject)).toEqual(expect.arrayContaining(["Autumn sale", "Dinner?"]));
+    expect(box.messages("Jev Junk").length).toBe(0);
+    expect(box.messages("Junk").length).toBe(0);
+    expect(box.ops.slice(start).filter((o) => o.op === "move").map((o) => o.dest)).toEqual(["Jev Auth"]);
+    expect(box.ops.some((o) => /delet|expunge/i.test(o.op))).toBe(false);
+  });
+
+  it("turning preview back on stops future moves and does not undo past ones", async () => {
+    const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
+    seed(box);
+    await addApplied(rt);
+    await rt.sync.syncAll();
+    expect(box.messages("Jev Auth").length).toBe(1);
+    const id = rt.accounts.list()[0].id;
+    expect(previewOn(rt, id).text).toMatch(/does not move anything|will not move anything/);
+    expect(rt.accounts.get(id)!.preview).toBe(true);
+    const start = box.ops.length;
+    box.deliver("INBOX", { from: "no-reply@accounts.example", subject: "Password reset requested", body: "Someone asked." });
+    await rt.sync.syncAll();
+    expect(writes(box, start)).toEqual([]);
+    expect(box.messages("Jev Auth").length).toBe(1); // past move stays, the new Auth was NOT moved
+    expect(box.messages("INBOX").map((m) => m.subject)).toContain("Password reset requested");
+    expect(previewOn(rt, "nope").kind).toBe("error");
+  });
+
+  it("filing actions in the app are recorded only, and contact the server not at all", async () => {
+    const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
+    seed(box);
+    await add(rt);
+    await rt.sync.syncAll();
+    const st = await rt.state;
+    const start = box.ops.length;
+    const nr = listView(st, { kind: "needs_review" });
+    const lunch = nr.find((r) => r.subject === "Lunch?")!;
+    const sale = nr.find((r) => r.subject === "Summer sale")!;
+    const r1 = await moveMessages(st, [lunch.token], "archive");
+    const r2 = await moveMessages(st, [sale.token], "junk");
+    expect(r1.text).toMatch(/Preview mode: recorded in the app only/);
+    expect(r2.moved).toBe(1);
+    const mj = await senderMarkJunk(st, "friend@mail.example");
+    expect(mj.text).toMatch(/Preview mode/);
+    // Auth is still protected from Junk in the app, in preview too
+    const auth = listView(st, { kind: "auth" })[0];
+    expect((await moveMessages(st, [auth.token], "junk")).moved).toBe(0);
+    const shaped = nr.find((r) => r.subject === "Note about your profile")!;
+    expect((await moveMessages(st, [shaped.token], "junk")).moved).toBe(0);
+    // zero operations of any kind reached the server
+    expect(box.ops.length).toBe(start);
+    expect(listView(st, { kind: "archived" }).map((r) => r.subject)).toEqual(["Lunch?"]);
+    expect(listView(st, { kind: "junk" }).map((r) => r.subject)).toEqual(["Summer sale"]);
+  });
+
+  it("Preview is enforced at the transport layer: even a direct adapter call cannot write", async () => {
+    const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
+    seed(box);
+    await add(rt);
+    await rt.sync.syncAll();
+    const id = rt.accounts.list()[0].id;
+    const adapter = await rt.adapterFor(id); // preview => read-only transport
+    const [m] = (await adapter.listMessages("INBOX")).messages;
+    const start = box.ops.length;
+    for (const b of ["auth", "junk", "needs_review", "archive"] as const) {
+      const r = await adapter.moveToBucket("INBOX", m.id, b);
+      expect(r.moved, b).toBe(false);
+    }
+    expect((await adapter.moveToInbox("INBOX", m.id)).moved).toBe(false);
+    expect(writes(box, start)).toEqual([]);
+    expect(box.folderPaths().filter((p) => p.startsWith("Jev"))).toEqual([]);
+  });
+
+  it("if the Auth folder cannot be created, Apply stops: preview stays on and nothing is moved", async () => {
+    const boxes = { "user@example.com": new FakeImapTransport({ failCreate: (p) => p === "Jev Auth" }) };
+    const { rt } = setup({ boxes });
+    seed(boxes["user@example.com"]);
+    await add(rt);
+    await rt.sync.syncAll();
+    const r = await applyFiling(rt, rt.accounts.list()[0].id);
+    expect(r.kind).toBe("error");
+    expect(r.text).toMatch(/Preview mode stays on/);
+    expect(rt.accounts.list()[0].preview).toBe(true);
+    expect(boxes["user@example.com"].ops.filter((o) => o.op === "move")).toEqual([]);
+  });
+
+  it("existing databases get the preview column with preview ON", () => {
+    const db = openDb(":memory:");
+    db.exec(`CREATE TABLE accounts (id TEXT PRIMARY KEY, provider TEXT NOT NULL, email TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL, tls TEXT NOT NULL, created_at TEXT NOT NULL, cursor TEXT, last_sync_at TEXT, last_sync_status TEXT, last_sync_note TEXT)`);
+    db.prepare(`INSERT INTO accounts (id, provider, email, host, port, tls, created_at) VALUES ('x','imap','a@b.example','h',993,'implicit','2026-01-01')`).run();
+    expect(new AccountStore(db).get("x")!.preview).toBe(true);
+  });
+
+  it("pipeline dryRun never attempts a move, not even for Auth", async () => {
+    const t = new FakeImapTransport();
+    seed(t);
+    const adapter = new ImapAdapter({ transport: t });
+    const res = await runPipeline({ adapter, folder: "INBOX", jev: new DisconnectedJev(), jevConnected: false, dryRun: true,
+      user: { allowlist: [], markedJunk: [], hasRepliedTo: () => false, hasAuthHistory: () => false }, gateOptions: { retries: 0 } });
+    expect(res.outcomes.every((o) => o.move === null && o.moveSkipped === "preview")).toBe(true);
+    expect(res.outcomes.find((o) => o.target === "auth")).toBeTruthy();
+    expect(writes(t)).toEqual([]);
+  });
+
+  it("Confirm-and-remove while still in preview leaves the server completely untouched", async () => {
+    const { rt, boxes } = setup();
+    const box = boxes["user@example.com"];
+    seed(box);
+    await add(rt);
+    await rt.sync.syncAll();
+    const start = box.ops.length;
+    await removeAccount(rt, rt.accounts.list()[0].id);
+    expect(box.ops.slice(start).filter((o) => o.op !== "close")).toEqual([]);
+    expect(box.folderPaths().filter((p) => p.startsWith("Jev"))).toEqual([]);
+  });
+});
+
+describe("Preview is re-checked while a sync runs, and Apply is single-flight", () => {
+  it("turning preview back on mid-run stops further moves immediately", async () => {
+    const t = new FakeImapTransport();
+    for (let i = 1; i <= 4; i++) t.deliver("INBOX", { from: "no-reply@accounts.example", subject: `Your verification code ${i}`, body: "Your code is 48291" + i });
+    const adapter = new ImapAdapter({ transport: t });
+    let preview = false;
+    let seen = 0;
+    const res = await runPipeline({
+      adapter, folder: "INBOX", jev: new DisconnectedJev(), jevConnected: false,
+      dryRun: () => preview,
+      user: { allowlist: [], markedJunk: [], hasRepliedTo: () => false, hasAuthHistory: () => false },
+      gateOptions: { retries: 0 },
+      onClassified: () => { if (++seen === 2) preview = true; }, // the user flips preview on after two messages
+    });
+    expect(res.outcomes.map((o) => o.moveSkipped ?? "moved")).toEqual(["moved", "moved", "preview", "preview"]);
+    expect(t.ops.filter((o) => o.op === "move").length).toBe(2);
+  });
+  it("two simultaneous Apply calls do not both run", async () => {
+    const { rt, boxes } = setup();
+    seed(boxes["user@example.com"]);
+    await add(rt);
+    await rt.sync.syncAll();
+    const id = rt.accounts.list()[0].id;
+    const [a, b] = await Promise.all([rt.applyFiling(id), rt.applyFiling(id)]);
+    expect([a.ok, b.ok].sort()).toEqual([false, true]);
+    expect(boxes["user@example.com"].messages("Jev Auth").length).toBe(1);
   });
 });

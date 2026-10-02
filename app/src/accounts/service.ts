@@ -1,11 +1,11 @@
 // Add / confirm / remove accounts.
 //  - testConnection: connects READ-ONLY (ReadOnlyTransport), lists folders and capabilities.
 //    Nothing on the mailbox changes and nothing is saved. The password waits in server memory.
-//  - confirm: only after the user confirms. Creates the Jev folders, then stores the password in
-//    the SecretStore (Keychain / encrypted file) and the account metadata in SQLite.
+//  - confirm: only after the user confirms. Stores the password in the SecretStore (Keychain /
+//    encrypted file) and the account metadata in SQLite, with PREVIEW MODE ON. It creates nothing on
+//    the server: the Jev folders are created only when the user applies filing (Runtime.applyFiling).
 //  - remove: deletes our stored credentials and local metadata. It NEVER connects to the server.
 import { randomBytes } from "node:crypto";
-import { ImapAdapter } from "../providers/imap/adapter";
 import { CredentialsProvider, ImapCredentials } from "../providers/imap/credentials";
 import { DEFAULT_BUCKET_FOLDERS } from "../providers/imap/folders";
 import { ICLOUD_PRESET, ImapPreset, TlsMode, genericPreset } from "../providers/imap/presets";
@@ -36,7 +36,7 @@ export interface ConnectionReport {
   tls: TlsMode;
   capabilities: TransportCapabilities;
   folders: FolderInfo[];
-  /** Folders that confirming will create. Nothing is created before then. */
+  /** Folders that will be created later, when the user applies filing (never at confirm time). */
   willCreate: string[];
 }
 
@@ -121,8 +121,8 @@ export class AccountService {
     this.pending.delete(token);
   }
 
-  /** The user confirmed: create the Jev folders, then save the secret and the account. */
-  async confirm(token: string): Promise<Result<{ account: AccountRow; created: string[]; fallbacks: string[] }>> {
+  /** The user confirmed: save the secret and the account (preview mode on). No server writes. */
+  async confirm(token: string): Promise<Result<{ account: AccountRow }>> {
     this.gc();
     const p = this.pending.get(token);
     if (!p) return { ok: false, error: "That connection test expired. Test the connection again." };
@@ -132,23 +132,6 @@ export class AccountService {
     const id = accountIdFor(input.provider, input.email);
     if (this.d.accounts.get(id)) return { ok: false, error: "That account is already added." };
 
-    const transport = this.d.makeTransport({ provider: input.provider, email: input.email, preset, credentials: { user: input.email, password } });
-    const adapter = new ImapAdapter({ transport, providerName: preset.name });
-    const created: string[] = [];
-    const fallbacks: string[] = [];
-    try {
-      await adapter.connect();
-      for (const b of ["auth", "needs_review", "junk"] as const) {
-        const info = await adapter.ensureBucket(b);
-        if (info.created) created.push(info.name);
-        if (info.fallback || info.inPlace) fallbacks.push(`${info.name}: ${info.inPlace ? "could not be created, mail will stay in place" : `could not be created, using ${info.fallback}`}`);
-      }
-    } catch (e) {
-      return { ok: false, error: this.safe(e, [password]) };
-    } finally {
-      try { await adapter.disconnect(); } catch { /* ignore */ }
-    }
-
     try {
       await this.d.secrets.set(id, JSON.stringify({ password }));
     } catch (e) {
@@ -157,7 +140,7 @@ export class AccountService {
     try {
       const account = this.d.accounts.add({ id, provider: input.provider, email: input.email, host: preset.host, port: preset.port, tls: preset.tls });
       this.d.onChange?.();
-      return { ok: true, account, created, fallbacks };
+      return { ok: true, account };
     } catch (e) {
       await this.d.secrets.delete(id).catch(() => undefined); // do not leave an orphaned secret
       return { ok: false, error: this.safe(e, [password]) };

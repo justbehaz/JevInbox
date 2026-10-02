@@ -8,6 +8,8 @@ import { CategoryManager } from "../categories/manager";
 import { DisconnectedJev } from "../jev/disconnected";
 import { ImapAdapter } from "../providers/imap/adapter";
 import { ImapFlowTransport } from "../providers/imap/imapflowTransport";
+import { DEFAULT_BUCKET_FOLDERS } from "../providers/imap/folders";
+import { ReadOnlyTransport } from "../providers/imap/readonly";
 import { createSecretStore, SecretStore } from "../secrets";
 import { SenderStore } from "../senders/store";
 import { CategoryRepo } from "../storage/categoryRepo";
@@ -16,6 +18,7 @@ import { openDb } from "../storage/db";
 import { SyncService } from "../sync/sync";
 import { createDemoState, DemoAppState } from "../ui/demo";
 import type { AppState } from "../ui/state";
+import { scrub } from "../providers/imap/sanitize";
 import type Database from "better-sqlite3";
 
 const REUSE_MS = 4 * 60 * 1000; // reconnect adapters that have been idle for a while
@@ -26,6 +29,9 @@ export interface RuntimeDeps {
   makeTransport?: TransportFactory;
   db?: Database.Database;
 }
+
+export interface ApplyPlan { accountId: string; email: string; authToMove: number; willCreate: string[] }
+export type ApplyResult = { ok: true; created: string[]; moved: number; failed: number } | { ok: false; error: string };
 
 export class Runtime {
   readonly db: Database.Database;
@@ -72,24 +78,100 @@ export class Runtime {
     return this.accounts.list().length > 0;
   }
 
-  private dropAdapters(): void {
-    for (const { adapter } of this.adapters.values()) void adapter.disconnect().catch(() => undefined);
-    this.adapters.clear();
+  private dropAdapters(accountId?: string): void {
+    for (const [k, { adapter }] of this.adapters) {
+      if (accountId && !k.startsWith(`${accountId}:`)) continue;
+      void adapter.disconnect().catch(() => undefined);
+      this.adapters.delete(k);
+    }
   }
 
-  /** A connected adapter for a saved account. Credentials come from the secret store only. */
-  async adapterFor(accountId: string): Promise<ImapAdapter> {
-    const hit = this.adapters.get(accountId);
-    if (hit && Date.now() - hit.at < REUSE_MS) return hit.adapter;
-    if (hit) { await hit.adapter.disconnect().catch(() => undefined); this.adapters.delete(accountId); }
+  /**
+   * A connected adapter for a saved account. Credentials come from the secret store only.
+   * While the account is in PREVIEW mode the transport is wrapped read-only, so no write (folder
+   * creation, move, copy, flag) can reach the server, whatever calls the adapter. Only
+   * applyFiling asks for a writable adapter (`write: true`), and only before preview is turned off.
+   */
+  async adapterFor(accountId: string, opts: { write?: boolean } = {}): Promise<ImapAdapter> {
     const acct = this.accounts.get(accountId);
     if (!acct) throw new Error("Unknown account.");
+    const readOnly = acct.preview && !opts.write;
+    const key = `${accountId}:${readOnly ? "ro" : "rw"}`;
+    const hit = this.adapters.get(key);
+    if (hit && Date.now() - hit.at < REUSE_MS) return hit.adapter;
+    if (hit) { await hit.adapter.disconnect().catch(() => undefined); this.adapters.delete(key); }
     const creds = await new SecretCredentialsProvider(this.secrets, acct.id, acct.email).get();
     const preset = { name: acct.provider === "icloud" ? "iCloud" : "IMAP", host: acct.host, port: acct.port, tls: acct.tls, authHint: "app_password" as const };
-    const adapter = new ImapAdapter({ transport: this.makeTransport({ provider: acct.provider, email: acct.email, preset, credentials: creds }), providerName: preset.name });
+    const raw = this.makeTransport({ provider: acct.provider, email: acct.email, preset, credentials: creds });
+    const adapter = new ImapAdapter({ transport: readOnly ? new ReadOnlyTransport(raw) : raw, providerName: preset.name });
     await adapter.connect();
-    this.adapters.set(accountId, { adapter, at: Date.now() });
+    this.adapters.set(key, { adapter, at: Date.now() });
     return adapter;
+  }
+
+  isPreview(accountId: string): boolean {
+    return this.accounts.get(accountId)?.preview ?? false;
+  }
+
+  setPreview(accountId: string, on: boolean): void {
+    this.accounts.setPreview(accountId, on);
+    this.dropAdapters(accountId);
+  }
+
+  /** What "Apply filing" would do. Reads the app's own records only. */
+  applyPlan(accountId: string): ApplyPlan | null {
+    const acct = this.accounts.get(accountId);
+    if (!acct) return null;
+    const authToMove = this.liveStore.query({ bucket: "auth" }).filter((m) => m.accountId === accountId && m.folder === "INBOX").length;
+    return { accountId, email: acct.email, authToMove, willCreate: (["auth", "needs_review", "junk"] as const).map((b) => DEFAULT_BUCKET_FOLDERS[b]) };
+  }
+
+  /**
+   * Turn preview OFF. This is the only place the Jev folders are created. Order: create folders
+   * (if the Auth folder cannot be made, stop and stay in preview), turn preview off, then move the
+   * Auth mail already recorded. Never junks or deletes anything.
+   */
+  private applying = new Set<string>();
+
+  async applyFiling(accountId: string): Promise<ApplyResult> {
+    if (this.applying.has(accountId)) return { ok: false, error: "Applying is already in progress for this account." };
+    this.applying.add(accountId);
+    try {
+      return await this.applyFilingInner(accountId);
+    } finally {
+      this.applying.delete(accountId);
+    }
+  }
+
+  private async applyFilingInner(accountId: string): Promise<ApplyResult> {
+    const acct = this.accounts.get(accountId);
+    if (!acct) return { ok: false, error: "Unknown account." };
+    if (!acct.preview) return { ok: false, error: "Preview mode is already off for this account." };
+    const created: string[] = [];
+    try {
+      const writer = await this.adapterFor(accountId, { write: true });
+      for (const b of ["auth", "needs_review", "junk"] as const) {
+        const info = await writer.ensureBucket(b);
+        if (info.created) created.push(info.name);
+        if (b === "auth" && (info.inPlace || !info.path)) {
+          return { ok: false, error: "Could not create the Jev Auth folder on your mailbox, so Preview mode stays on and nothing was moved." };
+        }
+      }
+    } catch (e) {
+      return { ok: false, error: `Could not prepare your mailbox: ${scrub(e instanceof Error ? e.message : "connection failed", []).slice(0, 200)} Preview mode stays on.` };
+    }
+    this.setPreview(accountId, false);
+    let moved = 0;
+    let failed = 0;
+    const adapter = await this.adapterFor(accountId); // now writable
+    for (const m of this.liveStore.query({ bucket: "auth" }).filter((x) => x.accountId === accountId && x.folder === "INBOX")) {
+      const r = await adapter.moveToBucket(m.folder, m.messageId, "auth");
+      if (r.success && r.moved) {
+        this.liveStore.updateLocation(accountId, m.folder, m.messageId, { bucket: "auth", newMessageId: r.newMessageId, folder: r.destination });
+        moved++;
+      } else failed++;
+    }
+    return { ok: true, created, moved, failed };
   }
 
   /** What the UI sees right now. */
@@ -106,12 +188,14 @@ export class Runtime {
       jev: new DisconnectedJev(),
       jevConnected: false,
       adapterFor: (id) => this.adapterFor(id),
+      isPreview: (id) => this.isPreview(id),
       accountIds: () => this.accounts.list().map((a) => a.id),
     });
   }
 }
 
-const KEY = "__jevRuntime";
+// Versioned: a dev-server hot reload must not keep serving a runtime object built by older code.
+const KEY = "__jevRuntime_v2";
 export function getRuntime(): Promise<Runtime> {
   const g = globalThis as unknown as Record<string, Promise<Runtime> | undefined>;
   return (g[KEY] ??= Promise.resolve().then(buildDefaultRuntime));

@@ -11,8 +11,10 @@ export function adapterMover(adapter: MailAdapter): JunkMover {
 }
 
 /** Like adapterMover, but picks the right account's adapter for each message. */
-export function routedMover(adapterFor: (accountId: string) => Promise<MailAdapter>): JunkMover {
+export function routedMover(adapterFor: (accountId: string) => Promise<MailAdapter>, isPreview: (accountId: string) => boolean = () => false): JunkMover {
   return async ({ messageId, accountId, folder }) => {
+    // Preview mode: record in the app only. The adapter is never called, so nothing is written.
+    if (isPreview(accountId)) return { success: true, bucketUsed: "junk", folder: null };
     const r = await (await adapterFor(accountId)).moveToBucket(folder, messageId, "junk");
     return { success: r.success && r.moved, bucketUsed: r.bucketUsed, newMessageId: r.newMessageId, folder: r.destination };
   };

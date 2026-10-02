@@ -27,6 +27,7 @@ export async function createDemoState(): Promise<DemoAppState> {
     mode: "demo", inboxFolder: "INBOX", store, categories: new CategoryManager(), jev: new DemoJev(demoScripts()),
     jevConnected: true, transport, adapter,
     adapterFor: async () => adapter,
+    isPreview: () => false,
     accountIds: () => [DEMO_ACCOUNT],
   };
   await ingestDemo(state);

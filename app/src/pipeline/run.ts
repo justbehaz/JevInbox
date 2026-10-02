@@ -20,6 +20,8 @@ export interface PipelineOptions {
    * only Auth mail is moved; everything else is recorded where it logically belongs but left in place.
    */
   jevConnected?: boolean;
+  /** Preview mode: classify and report only. No move is ever attempted. */
+  dryRun?: boolean | (() => boolean);
   /** First sync of a mailbox looks at the newest N messages only. */
   initialLimit?: number;
   /** At most this many messages per run (the cursor stops after the last one handled). */
@@ -37,7 +39,7 @@ export interface MessageOutcome {
   /** Set if the pipeline overrode the gate (should never happen for Auth). */
   override?: string;
   /** Set when the move was deliberately skipped (jev.ai not connected): the mail stays in place. */
-  moveSkipped?: "jev_disconnected";
+  moveSkipped?: "jev_disconnected" | "preview";
   error?: string;
 }
 
@@ -94,9 +96,11 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
 
       // jev.ai not connected: never junk, and only move Auth mail.
       let moveSkipped: MessageOutcome["moveSkipped"];
+      // Evaluated per message, so turning Preview back on mid-run stops further moves at once.
+      if (typeof o.dryRun === "function" ? o.dryRun() : o.dryRun) moveSkipped = "preview";
       if (o.jevConnected === false) {
         if (target === "junk") { target = "needs_review"; override = "jev_disconnected"; }
-        if (target !== "auth") moveSkipped = "jev_disconnected";
+        if (target !== "auth" && !moveSkipped) moveSkipped = "jev_disconnected";
       }
 
       let move: MoveResult | null = null;

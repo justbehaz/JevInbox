@@ -49,7 +49,7 @@ export type View =
   | { kind: "category"; id: string }
   | { kind: "sender"; key: string };
 
-export interface Row extends StoredMessage { token: string; categoryName: string | null; protectedMail: boolean }
+export interface Row extends StoredMessage { token: string; categoryName: string | null; protectedMail: boolean; previewNote: string | null }
 
 export function listView(st: AppState, view: View): Row[] {
   let rows: StoredMessage[];
@@ -65,12 +65,22 @@ export function listView(st: AppState, view: View): Row[] {
   return rows.map((m) => toRow(st, m));
 }
 
+export const PREVIEW_SUFFIX = " Preview mode: recorded in the app only; nothing was moved on your mailbox.";
+
+/** In Preview mode, where this message would go if the user applied filing. */
+function previewNote(st: AppState, m: StoredMessage): string | null {
+  if (!st.isPreview(m.accountId)) return null;
+  if (m.bucket === "auth" && m.folder === st.inboxFolder) return "Preview: would move to Jev Auth";
+  return "Preview: stays where it is";
+}
+
 function toRow(st: AppState, m: StoredMessage): Row {
   return {
     ...m,
     token: encodeToken(m.accountId, m.folder, m.messageId),
     categoryName: m.categoryId ? st.categories.nameOf(m.categoryId) : null,
     protectedMail: st.store.isProtected(m.accountId, m.folder, m.messageId),
+    previewNote: previewNote(st, m),
   };
 }
 
@@ -130,6 +140,12 @@ export interface MoveSummary extends Notice {
 
 /** Perform one provider move and mirror the result into the sender store. */
 async function relocate(st: AppState, m: StoredMessage, dest: "junk" | "needs_review" | "archive" | "auth" | "category", categoryId: string | null, reason: string): Promise<{ ok: boolean; bucket?: StoredBucket }> {
+  // Preview mode: record the filing in the app only. The server is not contacted at all.
+  if (st.isPreview(m.accountId)) {
+    const bucket: StoredBucket = dest === "category" ? "category" : (toStoredBucket(dest) ?? "needs_review");
+    st.store.updateLocation(m.accountId, m.folder, m.messageId, { bucket, categoryId: bucket === "category" ? categoryId : null, reason });
+    return { ok: true, bucket };
+  }
   let r: MoveResult;
   try {
     const adapter = await st.adapterFor(m.accountId);
@@ -163,6 +179,7 @@ export async function moveMessages(st: AppState, tokens: string[], target: MoveT
   let moved = 0;
   let failed = 0;
   let authBlocked = 0;
+  let previewMoves = 0;
   const targetName = target === "junk" ? "Junk" : target === "needs_review" ? "Needs review" : target === "archive" ? "Archive" : "that category";
 
   for (const token of tokens) {
@@ -187,7 +204,7 @@ export async function moveMessages(st: AppState, tokens: string[], target: MoveT
       if (!st.categories.get(target.category)?.enabled) { failed++; continue; }
       res = await relocate(st, m, "category", target.category, "user_filed");
     }
-    if (res.ok) moved++; else failed++;
+    if (res.ok) { moved++; if (st.isPreview(m.accountId)) previewMoves++; } else failed++;
   }
 
   let text: string;
@@ -206,6 +223,7 @@ export async function moveMessages(st: AppState, tokens: string[], target: MoveT
   } else {
     text = `Moved ${moved} message${moved === 1 ? "" : "s"} to ${targetName}.`;
   }
+  if (previewMoves) text += PREVIEW_SUFFIX;
   return { kind, text, moved, blocked, failed };
 }
 
@@ -221,7 +239,7 @@ export async function junkQueueAction(st: AppState, token: string, action: JunkA
   if (action === "keep") return { kind: "info", text: "Kept in Junk." };
   if (action === "archive") {
     const r = await relocate(st, m, "archive", null, "user_filed");
-    return r.ok ? { kind: "ok", text: "Archived. Archiving is not deleting; you can find it in your Archive." } : { kind: "error", text: "Could not archive that message." };
+    return r.ok ? { kind: "ok", text: "Archived. Archiving is not deleting; you can find it in your Archive." + (st.isPreview(m.accountId) ? PREVIEW_SUFFIX : "") } : { kind: "error", text: "Could not archive that message." };
   }
   // not junk: back to its category if it had one, otherwise Needs review
   const catId = m.categoryId && st.categories.get(m.categoryId)?.enabled ? m.categoryId : null;
@@ -232,7 +250,7 @@ export async function junkQueueAction(st: AppState, token: string, action: JunkA
     st.store.allow(m.senderKey);
     text += ` ${m.senderKey} is now allowed; future mail will be filed normally.`;
   }
-  return { kind: "ok", text };
+  return { kind: "ok", text: text + (st.isPreview(m.accountId) ? PREVIEW_SUFFIX : "") };
 }
 
 /** Needs review: one click files a message into a category or Auth. */
@@ -243,12 +261,12 @@ export async function fileFromReview(st: AppState, token: string, target: { cate
   if (m.bucket !== "needs_review") return { kind: "error", text: "That message is not in Needs review." };
   if (target === "auth") {
     const r = await relocate(st, m, "auth", null, "user_filed");
-    return r.ok ? { kind: "ok", text: "Filed as Auth." } : { kind: "error", text: "Could not file that message." };
+    return r.ok ? { kind: "ok", text: "Filed as Auth." + (st.isPreview(m.accountId) ? PREVIEW_SUFFIX : "") } : { kind: "error", text: "Could not file that message." };
   }
   const cat = st.categories.get(target.category);
   if (!cat || !cat.enabled) return { kind: "error", text: "That category is not available." };
   const r = await relocate(st, m, "category", cat.id, "user_filed");
-  return r.ok ? { kind: "ok", text: `Filed under ${cat.name}.` } : { kind: "error", text: "Could not file that message." };
+  return r.ok ? { kind: "ok", text: `Filed under ${cat.name}.${st.isPreview(m.accountId) ? PREVIEW_SUFFIX : ""}` } : { kind: "error", text: "Could not file that message." };
 }
 
 // ------------------------------------------------------------------ senders
@@ -277,8 +295,9 @@ export function describeMarkJunk(key: string, r: MarkJunkResult): string {
 }
 export async function senderMarkJunk(st: AppState, key: string): Promise<Notice> {
   try {
-    const r = await st.store.markJunk(key, routedMover((id) => st.adapterFor(id)));
-    return { kind: r.failed ? "info" : "ok", text: describeMarkJunk(key, r) };
+    const r = await st.store.markJunk(key, routedMover((id) => st.adapterFor(id), (id) => st.isPreview(id)));
+    const preview = st.accountIds().some((id) => st.isPreview(id));
+    return { kind: r.failed ? "info" : "ok", text: describeMarkJunk(key, r) + (preview ? " Preview mode: recorded in the app only; nothing was moved on your mailbox." : "") };
   } catch {
     return { kind: "error", text: "Unknown sender." };
   }
